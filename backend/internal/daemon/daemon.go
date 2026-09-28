@@ -1057,7 +1057,7 @@ func Run() error {
 }
 
 type reportSemanticSession interface {
-	SendSemantic(context.Context, domain.SessionID, string, string) error
+	SendSemanticAttempt(context.Context, domain.SessionID, string, string, int64) error
 	InterruptTUI(context.Context, domain.SessionID) error
 }
 
@@ -1069,11 +1069,11 @@ type reportSemanticDelivery struct {
 	}
 }
 
-func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID, message, idempotencyKey string) error {
+func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID, message, idempotencyKey string, attempt int64) error {
 	if d.sessions == nil {
 		return reportsvc.ErrReportDeliveryModeUnsupported
 	}
-	return d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	return d.sessions.SendSemanticAttempt(ctx, id, message, idempotencyKey, attempt)
 }
 
 func (d reportSemanticDelivery) Interrupt(ctx context.Context, id domain.SessionID) error {

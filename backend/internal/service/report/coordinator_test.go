@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +132,25 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPassesDurableAttemptCountOnRetry(t *testing.T) {
+	now := time.Date(2026, 9, 14, 13, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI}}
+	store.add(reportAt("one", "worker", now, now, "report"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("acceptance unknown")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("first attempt must remain pending")
+	}
+	delivery.submitErr = nil
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 1 || delivery.submissions[0].attempt != 2 {
+		t.Fatalf("retry = %#v, want durable attempt 2", delivery.submissions)
+	}
+}
+
 type coordinatorStore struct {
 	mu         sync.Mutex
 	now        time.Time
@@ -198,6 +218,7 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 			}
 			s.reports[i].DeliveryBatchID = batchID
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportClaimed, token, at
+			s.reports[i].DeliveryAttempts++
 			claimed = append(claimed, s.reports[i])
 		}
 	}
@@ -265,6 +286,7 @@ func sortReports(records []domain.ReportRecord) {
 type coordinatorSubmission struct {
 	target       domain.SessionID
 	message, key string
+	attempt      int64
 }
 type coordinatorDelivery struct {
 	submissions []coordinatorSubmission
@@ -272,11 +294,11 @@ type coordinatorDelivery struct {
 	submitErr   error
 }
 
-func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string, attempt int64) error {
 	if d.submitErr != nil {
 		return d.submitErr
 	}
-	d.submissions = append(d.submissions, coordinatorSubmission{target, message, key})
+	d.submissions = append(d.submissions, coordinatorSubmission{target: target, message: message, key: key, attempt: attempt})
 	return nil
 }
 func (d *coordinatorDelivery) Interrupt(_ context.Context, target domain.SessionID) error {

@@ -9506,6 +9506,111 @@ func TestSendSemanticCodexRechecksComposerAtWriteBoundary(t *testing.T) {
 	}
 }
 
+func codexReportHistoryTestSession(t *testing.T, content string) (*fakeStore, *Manager, *fakeMessenger, string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	path := filepath.Join(home, "sessions", "2026", "09", "29", "rollout-2026-09-29T00-00-00-native-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if content != "" {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{
+			RuntimeHandleID: "handle-1", RuntimeLaunchID: "launch-1", AgentSessionID: "native-1", AgentSessionIDLaunchID: "launch-1",
+		}})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, codex.New(), msg, st)
+	m.runtime.(*fakeRuntime).styledOutput = "› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n"
+	return st, m, msg, path
+}
+
+func TestSendSemanticCodexRecoversLostHookFromNativeHistory(t *testing.T) {
+	const deliveryID = "report-batch:accepted"
+	st, m, msg, path := codexReportHistoryTestSession(t, "")
+	msg.onSend = func(id domain.SessionID, message string) {
+		if message == "" {
+			t.Fatal("history acceptance must prevent an Enter retry")
+		}
+		content := `{"type":"event_msg","payload":{"type":"user_message","message":"<ao-report-delivery id=\"report-batch:accepted\">\nReport"}}` + "\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.SendSemanticAttempt(context.Background(), "s1", "Report", deliveryID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("writes = %q, want one paste transaction", msg.msgs)
+	}
+	if st.sessions["s1"].Metadata.ConversationCheckpointTurnID == deliveryID {
+		t.Fatal("test requires the AO hook to remain lost")
+	}
+	if err := m.SendSemanticAttempt(context.Background(), "s1", "Report", deliveryID, 2); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("accepted report was duplicated: %q", msg.msgs)
+	}
+}
+
+func TestSendSemanticCodexHistoryUsesSessionProjectCodexHome(t *testing.T) {
+	st, m, msg, _ := codexReportHistoryTestSession(t, "")
+	projectHome := t.TempDir()
+	path := filepath.Join(projectHome, "sessions", "2026", "09", "29", "rollout-2026-09-29T00-00-00-native-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"type":"event_msg","payload":{"type":"user_message","message":"<ao-report-delivery id=\"report-batch:accepted\">"}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := st.sessions["s1"]
+	rec.ProjectID = "p"
+	st.sessions["s1"] = rec
+	st.projects["p"] = domain.ProjectRecord{ID: "p", Config: domain.ProjectConfig{Env: map[string]string{"CODEX_HOME": projectHome}}}
+	if err := m.SendSemanticAttempt(context.Background(), "s1", "Report", "report-batch:accepted", 2); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("accepted report duplicated: %q", msg.msgs)
+	}
+}
+
+func TestSendSemanticCodexRetriesOnlyAfterReadableHistoryExcludesDelivery(t *testing.T) {
+	const deliveryID = "report-batch:missing"
+	for _, tc := range []struct {
+		name, history string
+		wantWrite     bool
+	}{
+		{"readable history", `{"type":"event_msg","payload":{"type":"user_message","message":"Earlier prompt"}}` + "\n", true},
+		{"unavailable history", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, m, msg, _ := codexReportHistoryTestSession(t, tc.history)
+			msg.onSend = func(id domain.SessionID, message string) {
+				rec := st.sessions[id]
+				rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointCoordination
+				rec.Metadata.ConversationCheckpointGeneration = "launch-1"
+				rec.Metadata.ConversationCheckpointTurnID = deliveryID
+				st.sessions[id] = rec
+			}
+			err := m.SendSemanticAttempt(context.Background(), "s1", "Report", deliveryID, 2)
+			if tc.wantWrite && err != nil || !tc.wantWrite && err == nil {
+				t.Fatalf("retry err=%v wantWrite=%v", err, tc.wantWrite)
+			}
+			if got := len(msg.msgs); (got == 1) != tc.wantWrite {
+				t.Fatalf("writes = %q wantWrite=%v", msg.msgs, tc.wantWrite)
+			}
+		})
+	}
+}
+
 func TestSendSemanticCodexRetryUsesExistingDraftWithoutPastingAgain(t *testing.T) {
 	const deliveryID = "report-batch:retry"
 	st := newFakeStore()

@@ -11,11 +11,12 @@ type reportDeliverySession struct {
 	sentID      domain.SessionID
 	sentMessage string
 	sentKey     string
+	sentAttempt int64
 	interrupted domain.SessionID
 }
 
-func (s *reportDeliverySession) SendSemantic(_ context.Context, id domain.SessionID, message, key string) error {
-	s.sentID, s.sentMessage, s.sentKey = id, message, key
+func (s *reportDeliverySession) SendSemanticAttempt(_ context.Context, id domain.SessionID, message, key string, attempt int64) error {
+	s.sentID, s.sentMessage, s.sentKey, s.sentAttempt = id, message, key, attempt
 	return nil
 }
 
@@ -38,10 +39,10 @@ func TestReportSemanticDeliveryUsesAcceptedTUIBoundary(t *testing.T) {
 			ID: "ao-1", Mode: domain.SessionModeTUI,
 		}},
 	}
-	if err := delivery.Submit(context.Background(), "ao-1", "report context", "report-batch:abc123"); err != nil {
+	if err := delivery.Submit(context.Background(), "ao-1", "report context", "report-batch:abc123", 1); err != nil {
 		t.Fatal(err)
 	}
-	if sessions.sentID != "ao-1" || sessions.sentMessage != "report context" || sessions.sentKey != "report-batch:abc123" {
+	if sessions.sentID != "ao-1" || sessions.sentMessage != "report context" || sessions.sentKey != "report-batch:abc123" || sessions.sentAttempt != 1 {
 		t.Fatalf("semantic send = %+v", sessions)
 	}
 	if err := delivery.Interrupt(context.Background(), "ao-1"); err != nil {
