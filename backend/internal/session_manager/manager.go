@@ -3747,7 +3747,25 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	}
 	if needsWrite {
 		wrapped := domain.WrapReportDelivery(clientMessageID, message)
-		if err := m.send(ctx, id, wrapped, clientMessageID); err != nil {
+		var preWrite func(context.Context, domain.SessionRecord) error
+		if rec.Harness == domain.HarnessCodex {
+			preWrite = func(checkCtx context.Context, current domain.SessionRecord) error {
+				if current.Harness != domain.HarnessCodex || current.Metadata.RuntimeHandleID != rec.Metadata.RuntimeHandleID ||
+					current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID {
+					return errors.New("Codex report runtime changed before paste")
+				}
+				observation, _, inspectErr := m.codexReportSurface(checkCtx, current, clientMessageID)
+				if inspectErr != nil {
+					return inspectErr
+				}
+				if observation.Composer != ports.TerminalComposerEmpty ||
+					(observation.Work != ports.TerminalSurfaceWorkIdle && observation.Work != ports.TerminalSurfaceWorkActive) {
+					return errors.New("Codex composer changed before report paste")
+				}
+				return nil
+			}
+		}
+		if err := m.sendWithPreWrite(ctx, id, wrapped, clientMessageID, preWrite); err != nil {
 			return err
 		}
 	}
@@ -3881,6 +3899,10 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
+	return m.sendWithPreWrite(ctx, id, message, clientMessageID, nil)
+}
+
+func (m *Manager) sendWithPreWrite(ctx context.Context, id domain.SessionID, message, clientMessageID string, preWrite func(context.Context, domain.SessionRecord) error) error {
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox
@@ -3915,7 +3937,12 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 			}
 		}
 	}
-	outcome, err := m.messenger.DeliverWithPostWrite(ctx, id, message, afterWrite)
+	var outcome sessionguard.Outcome
+	if preWrite != nil {
+		outcome, err = m.messenger.DeliverChecked(ctx, id, message, preWrite)
+	} else {
+		outcome, err = m.messenger.DeliverWithPostWrite(ctx, id, message, afterWrite)
+	}
 	if err != nil {
 		return fmt.Errorf("send %s: %w", id, err)
 	}

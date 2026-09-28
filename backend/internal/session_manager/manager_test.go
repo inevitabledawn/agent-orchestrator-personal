@@ -418,6 +418,7 @@ type fakeRuntime struct {
 	outputCalls        int
 	outputErr          error
 	styledOutput       string
+	styledOutputs      []string
 	interruptErr       error
 	interrupts         []string
 	onInterrupt        func(ports.RuntimeHandle)
@@ -633,6 +634,11 @@ func (r *fakeRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _ int)
 func (r *fakeRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
 	if r.outputErr != nil {
 		return "", r.outputErr
+	}
+	if len(r.styledOutputs) > 0 {
+		out := r.styledOutputs[0]
+		r.styledOutputs = r.styledOutputs[1:]
+		return out, nil
 	}
 	return r.styledOutput, nil
 }
@@ -9480,6 +9486,23 @@ func TestSendSemanticCodexRescuesOnlyVerifiedReportDraft(t *testing.T) {
 				t.Fatal("rescue must send Enter only, without duplicating report text")
 			}
 		})
+	}
+}
+
+func TestSendSemanticCodexRechecksComposerAtWriteBoundary(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "handle-1", RuntimeLaunchID: "launch-1"}})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, codex.New(), msg, st)
+	const empty = "› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n"
+	const existingDraft = "› <ao-report-delivery-end id=\"report-batch:existing\"/>\n\ngpt-5.6-sol low · ~/project\n"
+	m.runtime.(*fakeRuntime).styledOutputs = []string{empty, existingDraft}
+	if err := m.SendSemantic(context.Background(), "s1", "Report", "report-batch:new"); err == nil {
+		t.Fatal("composer changed after preflight: report paste must be refused")
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("report appended to existing draft: %q", msg.msgs)
 	}
 }
 
