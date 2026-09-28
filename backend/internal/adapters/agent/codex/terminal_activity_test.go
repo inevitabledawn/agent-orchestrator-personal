@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -131,6 +132,27 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 			got := (&Plugin{}).InspectTerminalSurface(tt.output)
 			if got.Work != tt.wantWork || got.Composer != tt.wantEditor {
 				t.Fatalf("InspectTerminalSurface() = %+v, want work=%v composer=%v", got, tt.wantWork, tt.wantEditor)
+			}
+		})
+	}
+}
+
+func TestReportDraftVisibleRequiresCurrentNormalComposerAndMatchingID(t *testing.T) {
+	p := &Plugin{}
+	id := "report-batch:one"
+	draft := "› <ao-report-delivery id=\"report-batch:one\">\nReport text\n</ao-report-delivery>\n<ao-report-delivery-end id=\"report-batch:one\"/>\n\ngpt-5.6-sol low · ~/project\n"
+	if !p.ReportDraftVisible(draft, id) {
+		t.Fatal("matching report in normal composer must be visible")
+	}
+	for name, output := range map[string]string{
+		"other delivery": strings.ReplaceAll(draft, "report-batch:one", "report-batch:two"),
+		"approval":       "› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n",
+		"transcript":     "› <ao-report-delivery id=\"report-batch:one\">\nReport text\n",
+		"empty":          "› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if p.ReportDraftVisible(output, id) {
+				t.Fatal("must not treat ambiguous surface as a report draft")
 			}
 		})
 	}

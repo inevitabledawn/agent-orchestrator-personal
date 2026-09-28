@@ -62,6 +62,31 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 	return observation
 }
 
+// ReportDraftVisible is deliberately stricter than generic draft detection.
+// An Enter-only rescue is allowed only when the current normal composer shows
+// this delivery's identity. The trailing marker remains visible when a long
+// report scrolls its opening tag out of the viewport.
+func (p *Plugin) ReportDraftVisible(output, deliveryID string) bool {
+	if deliveryID == "" {
+		return false
+	}
+	state := p.InspectTerminalSurface(output)
+	if state.Work != ports.TerminalSurfaceWorkIdle || state.Composer != ports.TerminalComposerDraft {
+		return false
+	}
+	lines := terminalLines(output)
+	start := len(lines) - 12
+	if start < 0 {
+		start = 0
+	}
+	if prompt, footer := codexPromptFooter(lines, start); prompt < 0 || footer < 0 {
+		return false
+	}
+	frame := terminalui.PlainTerminalText(codexComposerFrame(output))
+	return strings.Contains(frame, `<ao-report-delivery id="`+deliveryID+`">`) ||
+		strings.Contains(frame, `<ao-report-delivery-end id="`+deliveryID+`"/>`)
+}
+
 func codexInitialComposer(lines []string, currentPrompt int) bool {
 	header := false
 	prompts := 0

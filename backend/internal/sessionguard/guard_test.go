@@ -3,11 +3,53 @@ package sessionguard
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+type orderedMessenger struct {
+	mu      sync.Mutex
+	entered []string
+	first   chan struct{}
+	release chan struct{}
+}
+
+func (m *orderedMessenger) Send(_ context.Context, _ domain.SessionID, msg string) error {
+	m.mu.Lock()
+	m.entered = append(m.entered, msg)
+	m.mu.Unlock()
+	if msg == "first" {
+		close(m.first)
+		<-m.release
+	}
+	return nil
+}
+
+func TestGuardSerializesCompleteWritesToOneSession(t *testing.T) {
+	messenger := &orderedMessenger{first: make(chan struct{}), release: make(chan struct{})}
+	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, messenger, nil)
+	firstDone := make(chan struct{})
+	go func() { _, _ = g.Deliver(context.Background(), "s1", "first"); close(firstDone) }()
+	<-messenger.first
+	secondDone := make(chan struct{})
+	go func() { _, _ = g.Deliver(context.Background(), "s1", "second"); close(secondDone) }()
+	select {
+	case <-secondDone:
+		t.Fatal("second write crossed the first message transaction")
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(messenger.release)
+	<-firstDone
+	<-secondDone
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if len(messenger.entered) != 2 || messenger.entered[0] != "first" || messenger.entered[1] != "second" {
+		t.Fatalf("write order = %q", messenger.entered)
+	}
+}
 
 type fakeStore struct {
 	rec domain.SessionRecord

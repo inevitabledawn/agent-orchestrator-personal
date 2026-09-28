@@ -417,6 +417,7 @@ type fakeRuntime struct {
 	outputs            []string
 	outputCalls        int
 	outputErr          error
+	styledOutput       string
 	interruptErr       error
 	interrupts         []string
 	onInterrupt        func(ports.RuntimeHandle)
@@ -633,7 +634,7 @@ func (r *fakeRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeH
 	if r.outputErr != nil {
 		return "", r.outputErr
 	}
-	return "", nil
+	return r.styledOutput, nil
 }
 
 type fakeAgent struct{}
@@ -9423,6 +9424,121 @@ func TestSendSemanticTUIRequiresCorrelatedPromptAcceptance(t *testing.T) {
 	}
 	if len(msg.msgs) != 1 {
 		t.Fatalf("retry pane writes = %d, want 1", len(msg.msgs))
+	}
+}
+
+func TestSendSemanticCodexRescuesOnlyVerifiedReportDraft(t *testing.T) {
+	const deliveryID = "report-batch:verified"
+	const empty = "› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n"
+	const approval = "› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n"
+	for _, tc := range []struct {
+		name       string
+		afterPaste string
+		wantNudge  bool
+	}{
+		{"visible draft", "› <ao-report-delivery id=\"report-batch:verified\">\nReport\n</ao-report-delivery>\n<ao-report-delivery-end id=\"report-batch:verified\"/>\n\ngpt-5.6-sol low · ~/project\n", true},
+		{"approval", approval, false},
+		{"ambiguous surface", "screen changed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+				Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "handle-1", RuntimeLaunchID: "launch-1"}})
+			msg := &fakeMessenger{}
+			m := newSendTestManager(t, codex.New(), msg, st)
+			rt := m.runtime.(*fakeRuntime)
+			rt.styledOutput = empty
+			msg.onSend = func(id domain.SessionID, message string) {
+				if message != "" {
+					rt.styledOutput = tc.afterPaste
+					return
+				}
+				rec := st.sessions[id]
+				rec.Activity.State = domain.ActivityActive
+				rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointCoordination
+				rec.Metadata.ConversationCheckpointGeneration = "launch-1"
+				rec.Metadata.ConversationCheckpointTurnID = deliveryID
+				st.sessions[id] = rec
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			err := m.SendSemantic(ctx, "s1", "Report", deliveryID)
+			if tc.wantNudge && err != nil {
+				t.Fatalf("verified draft not accepted: %v", err)
+			}
+			if !tc.wantNudge && err == nil {
+				t.Fatal("ambiguous draft must not be accepted")
+			}
+			wantWrites := 1
+			if tc.wantNudge {
+				wantWrites++
+			}
+			if got := len(msg.msgs); got != wantWrites {
+				t.Fatalf("pane writes = %d, want %d; messages=%q", got, wantWrites, msg.msgs)
+			}
+			if tc.wantNudge && msg.msgs[1] != "" {
+				t.Fatal("rescue must send Enter only, without duplicating report text")
+			}
+		})
+	}
+}
+
+func TestSendSemanticCodexRetryUsesExistingDraftWithoutPastingAgain(t *testing.T) {
+	const deliveryID = "report-batch:retry"
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "handle-1", RuntimeLaunchID: "launch-1"}})
+	msg := &fakeMessenger{onSend: func(id domain.SessionID, message string) {
+		if message != "" {
+			t.Fatal("retry pasted duplicate report text")
+		}
+		rec := st.sessions[id]
+		rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointCoordination
+		rec.Metadata.ConversationCheckpointGeneration = "launch-1"
+		rec.Metadata.ConversationCheckpointTurnID = deliveryID
+		st.sessions[id] = rec
+	}}
+	m := newSendTestManager(t, codex.New(), msg, st)
+	m.runtime.(*fakeRuntime).styledOutput = "› <ao-report-delivery-end id=\"report-batch:retry\"/>\n\ngpt-5.6-sol low · ~/project\n"
+	if err := m.SendSemantic(context.Background(), "s1", "Report", deliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 || msg.msgs[0] != "" {
+		t.Fatalf("retry writes = %q, want one Enter only", msg.msgs)
+	}
+}
+
+func TestSendSemanticCodexDefersAnotherBatchWhileDraftIsOpen(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "handle-1", RuntimeLaunchID: "launch-1"}})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, codex.New(), msg, st)
+	m.runtime.(*fakeRuntime).styledOutput = "› <ao-report-delivery-end id=\"report-batch:old\"/>\n\ngpt-5.6-sol low · ~/project\n"
+	if err := m.SendSemantic(context.Background(), "s1", "New report", "report-batch:new"); !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
+		t.Fatalf("second batch error = %v, want deferral", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("second batch appended to draft: %q", msg.msgs)
+	}
+}
+
+func TestSendSemanticCodexStopsWhenRuntimeGenerationChanges(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "handle-1", RuntimeLaunchID: "launch-1"}})
+	msg := &fakeMessenger{onSend: func(id domain.SessionID, message string) {
+		rec := st.sessions[id]
+		rec.Metadata.RuntimeLaunchID = "launch-2"
+		st.sessions[id] = rec
+	}}
+	m := newSendTestManager(t, codex.New(), msg, st)
+	m.runtime.(*fakeRuntime).styledOutput = "› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n"
+	if err := m.SendSemantic(context.Background(), "s1", "Report", "report-batch:changed"); !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
+		t.Fatalf("generation change error = %v", err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("generation change writes = %q, want no rescue", msg.msgs)
 	}
 }
 

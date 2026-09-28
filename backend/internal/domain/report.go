@@ -14,7 +14,7 @@ const reportDeliveryPrefix = `<ao-report-delivery id="`
 // WrapReportDelivery marks an AO-authored report batch so provider prompt
 // hooks can correlate semantic acceptance with its durable delivery identity.
 func WrapReportDelivery(id, message string) string {
-	return fmt.Sprintf("%s%s\">\n%s\n</ao-report-delivery>", reportDeliveryPrefix, id, message)
+	return fmt.Sprintf("%s%s\">\n%s\n</ao-report-delivery>\n<ao-report-delivery-end id=\"%s\"/>", reportDeliveryPrefix, id, message, id)
 }
 
 // ReportDeliveryID returns the durable identity from an AO report envelope.

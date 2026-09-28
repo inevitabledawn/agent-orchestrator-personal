@@ -8,6 +8,9 @@ import (
 
 func TestReportDeliveryEnvelopeRoundTrip(t *testing.T) {
 	message := WrapReportDelivery("report-batch:abc_123", "Reports since your previous turn:\ncomplete")
+	if !strings.Contains(message, `<ao-report-delivery-end id="report-batch:abc_123"/>`) {
+		t.Fatal("report delivery must retain its identity at the end of a long draft")
+	}
 	if got, ok := ReportDeliveryID(message); !ok || got != "report-batch:abc_123" {
 		t.Fatalf("ReportDeliveryID() = %q, %v", got, ok)
 	}

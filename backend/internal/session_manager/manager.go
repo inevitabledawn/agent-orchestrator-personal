@@ -3726,12 +3726,35 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	if semanticMessageAccepted(rec, clientMessageID) {
 		return nil
 	}
-	wrapped := domain.WrapReportDelivery(clientMessageID, message)
-	if err := m.send(ctx, id, wrapped, clientMessageID); err != nil {
-		return err
+	needsWrite := true
+	if rec.Harness == domain.HarnessCodex {
+		observation, draftVisible, inspectErr := m.codexReportSurface(ctx, rec, clientMessageID)
+		if inspectErr != nil {
+			m.logger.Warn("report delivery deferred: Codex composer inspection failed",
+				"sessionID", id, "harness", rec.Harness, "deliveryID", clientMessageID,
+				"activity", rec.Activity.State, "error", inspectErr)
+			return fmt.Errorf("inspect Codex report composer: %w", inspectErr)
+		}
+		if draftVisible {
+			needsWrite = false // a retry must never append another copy to the same draft
+		} else if observation.Composer != ports.TerminalComposerEmpty ||
+			(observation.Work != ports.TerminalSurfaceWorkIdle && observation.Work != ports.TerminalSurfaceWorkActive) {
+			m.logger.Warn("report delivery deferred: Codex composer is not safe for a new paste",
+				"sessionID", id, "harness", rec.Harness, "deliveryID", clientMessageID,
+				"activity", rec.Activity.State, "composer", observation.Composer, "work", observation.Work)
+			return fmt.Errorf("%w: Codex composer is not empty", ErrSemanticAcceptanceUnsupported)
+		}
+	}
+	if needsWrite {
+		wrapped := domain.WrapReportDelivery(clientMessageID, message)
+		if err := m.send(ctx, id, wrapped, clientMessageID); err != nil {
+			return err
+		}
 	}
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
+	rescueAt := time.Now().Add(m.sendConfirm.attemptDeadline)
+	rescueAttempted := false
 	ticker := time.NewTicker(m.sendConfirm.pollInterval)
 	defer ticker.Stop()
 	for {
@@ -3742,16 +3765,77 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		if !found || current.IsTerminated || current.Activity.State == domain.ActivityExited {
 			return ErrTerminated
 		}
+		if current.Metadata.RuntimeHandleID != rec.Metadata.RuntimeHandleID ||
+			current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID {
+			return fmt.Errorf("%w: runtime generation changed during report delivery", ErrSemanticAcceptanceUnsupported)
+		}
 		if semanticMessageAccepted(current, clientMessageID) {
 			return nil
+		}
+		if rec.Harness == domain.HarnessCodex && !rescueAttempted && !time.Now().Before(rescueAt) {
+			rescueAttempted = true
+			m.rescueCodexReportDraft(ctx, rec, clientMessageID)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if rec.Harness == domain.HarnessCodex {
+				observation, draftVisible, inspectErr := m.codexReportSurface(ctx, current, clientMessageID)
+				m.logger.Warn("report delivery was not semantically accepted",
+					"sessionID", id, "harness", rec.Harness, "deliveryID", clientMessageID,
+					"activity", current.Activity.State, "composer", observation.Composer,
+					"draftVisible", draftVisible, "inspectionError", inspectErr)
+			}
 			return fmt.Errorf("%w: prompt submission was not observed", ErrSemanticAcceptanceUnsupported)
 		case <-ticker.C:
 		}
+	}
+}
+
+type codexReportDraftInspector interface {
+	ports.TerminalSurfaceInspector
+	ReportDraftVisible(output, deliveryID string) bool
+}
+
+func (m *Manager) codexReportSurface(ctx context.Context, rec domain.SessionRecord, deliveryID string) (ports.TerminalSurfaceObservation, bool, error) {
+	if m.agents == nil || rec.Metadata.RuntimeHandleID == "" {
+		return ports.TerminalSurfaceObservation{}, false, errors.New("Codex runtime is unavailable")
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	inspector, hasInspector := agent.(codexReportDraftInspector)
+	reader, hasReader := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok || !hasInspector || !hasReader {
+		return ports.TerminalSurfaceObservation{}, false, errors.New("Codex terminal inspection is unavailable")
+	}
+	output, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 80)
+	if err != nil {
+		return ports.TerminalSurfaceObservation{}, false, err
+	}
+	return inspector.InspectTerminalSurface(output), inspector.ReportDraftVisible(output, deliveryID), nil
+}
+
+func (m *Manager) rescueCodexReportDraft(ctx context.Context, original domain.SessionRecord, deliveryID string) {
+	outcome, err := m.messenger.DeliverChecked(ctx, original.ID, "", func(checkCtx context.Context, current domain.SessionRecord) error {
+		if current.Harness != domain.HarnessCodex || current.Metadata.RuntimeHandleID != original.Metadata.RuntimeHandleID ||
+			current.Metadata.RuntimeLaunchID != original.Metadata.RuntimeLaunchID ||
+			semanticMessageAccepted(current, deliveryID) ||
+			(current.Activity.State != domain.ActivityIdle && current.Activity.State != domain.ActivityWaitingInput) {
+			return errors.New("Codex report owner or activity changed")
+		}
+		_, visible, inspectErr := m.codexReportSurface(checkCtx, current, deliveryID)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if !visible {
+			return errors.New("matching Codex report draft is not visible")
+		}
+		return nil
+	})
+	if err != nil || outcome != sessionguard.Sent {
+		m.logger.Warn("report delivery Enter rescue skipped",
+			"sessionID", original.ID, "harness", original.Harness, "deliveryID", deliveryID,
+			"outcome", outcome.String(), "error", err)
 	}
 }
 
