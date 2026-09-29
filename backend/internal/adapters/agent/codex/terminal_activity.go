@@ -70,21 +70,33 @@ func (p *Plugin) ReportDraftVisible(output, deliveryID string) bool {
 	if deliveryID == "" {
 		return false
 	}
-	state := p.InspectTerminalSurface(output)
-	if state.Work != ports.TerminalSurfaceWorkIdle || state.Composer != ports.TerminalComposerDraft {
-		return false
-	}
 	lines := terminalLines(output)
-	start := len(lines) - 12
-	if start < 0 {
-		start = 0
-	}
-	if prompt, footer := codexPromptFooter(lines, start); prompt < 0 || footer < 0 {
+	prompt, footer := codexPromptFooter(lines, 0)
+	if prompt < 0 || footer < 0 || len(lines)-footer > 3 || codexConfirmationFrame(lines, 0) {
 		return false
 	}
-	frame := terminalui.PlainTerminalText(codexComposerFrame(output))
-	return strings.Contains(frame, `<ao-report-delivery id="`+deliveryID+`">`) ||
-		strings.Contains(frame, `<ao-report-delivery-end id="`+deliveryID+`"/>`)
+	// Real styled captures distinguish the current bold prompt from a prompt in
+	// scrollback. Long reports can push that prompt far above the usual 8-line
+	// composer lookback, while leaving the delivery's trailing marker visible.
+	if strings.Contains(output, "\x1b[") && !terminalui.LastPromptHasBoldMarkerWithin(output, "›", 80) {
+		return false
+	}
+	if prompt > 0 && codexActiveStatusLine(lines[prompt-1]) {
+		return false
+	}
+	frame := strings.Join(lines[prompt:footer], "\n")
+	lastDraftLine := strings.TrimSpace(lines[footer-1])
+	if footer-1 == prompt {
+		lastDraftLine = strings.TrimSpace(strings.TrimPrefix(lastDraftLine, "›"))
+	}
+	endMarker := `<ao-report-delivery-end id="` + deliveryID + `"/>`
+	if lastDraftLine == endMarker && strings.Contains(frame, endMarker) {
+		return true
+	}
+	// Older drafts created before AO added the trailing marker can still be
+	// rescued when their opening identity and closing tag are both visible.
+	return lastDraftLine == "</ao-report-delivery>" &&
+		strings.Contains(frame, `<ao-report-delivery id="`+deliveryID+`">`)
 }
 
 func codexInitialComposer(lines []string, currentPrompt int) bool {

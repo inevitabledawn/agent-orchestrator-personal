@@ -9437,12 +9437,15 @@ func TestSendSemanticCodexRescuesOnlyVerifiedReportDraft(t *testing.T) {
 	const deliveryID = "report-batch:verified"
 	const empty = "› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n"
 	const approval = "› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n"
+	longDraft := "\x1b[1m›\x1b[0m status line 091\n" + strings.Repeat("  status line\n", 28) +
+		"  <ao-report-delivery-end id=\"report-batch:verified\"/>\n\n  GPT-6-Sol medium · ~\n  tab to queue message\n"
 	for _, tc := range []struct {
 		name       string
 		afterPaste string
 		wantNudge  bool
 	}{
 		{"visible draft", "› <ao-report-delivery id=\"report-batch:verified\">\nReport\n</ao-report-delivery>\n<ao-report-delivery-end id=\"report-batch:verified\"/>\n\ngpt-5.6-sol low · ~/project\n", true},
+		{"long visible draft", longDraft, true},
 		{"approval", approval, false},
 		{"ambiguous surface", "screen changed", false},
 	} {

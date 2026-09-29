@@ -141,13 +141,19 @@ func LastPromptComposerState(output, marker string, chromeLabels ...string) Comp
 // when a constrained TUI viewport omits its normal footer but retains the SGR
 // styling that distinguishes current chrome from transcript content.
 func LastPromptHasBoldMarker(output, marker string) bool {
+	return LastPromptHasBoldMarkerWithin(output, marker, composerLookbackLines)
+}
+
+// LastPromptHasBoldMarkerWithin is the bounded variant for composers that may
+// fill an entire terminal viewport with wrapped input.
+func LastPromptHasBoldMarkerWithin(output, marker string, lookbackLines int) bool {
 	marker = strings.TrimSpace(marker)
-	if marker == "" {
+	if marker == "" || lookbackLines <= 0 {
 		return false
 	}
 	markerRunes := []rune(marker)
 	lines := styledTerminalLines(output)
-	start := len(lines) - composerLookbackLines
+	start := len(lines) - lookbackLines
 	if start < 0 {
 		start = 0
 	}
