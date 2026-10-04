@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -366,5 +368,35 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spec.Fields, want) {
 		t.Fatalf("config fields\nwant: %#v\n got: %#v", want, spec.Fields)
+	}
+}
+
+func TestInstalledAgyLaunchFlags(t *testing.T) {
+	if os.Getenv("AO_AGENT_CLI_COMPAT") != "1" {
+		t.Skip("set AO_AGENT_CLI_COMPAT=1 for installed CLI checks")
+	}
+	bin, err := exec.LookPath("agy")
+	if err != nil {
+		t.Fatal("agy is required for this compatibility check")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	help, err := exec.CommandContext(ctx, bin, "--help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("installed agy help: %v", err)
+	}
+	plugin := &Plugin{resolvedBinary: bin}
+	launch, err := plugin.GetLaunchCommand(ctx, ports.LaunchConfig{Permissions: ports.PermissionModeBypassPermissions, Prompt: "compatibility check", WorkspacePath: t.TempDir(), Config: ports.AgentConfig{Model: "test-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore, ok, err := plugin.GetRestoreCommand(ctx, ports.RestoreConfig{Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "test-model"}, Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "test-conversation"}, WorkspacePath: t.TempDir()}})
+	if err != nil || !ok {
+		t.Fatalf("restore command: ok=%v err=%v", ok, err)
+	}
+	for _, arg := range append(launch, restore...) {
+		if strings.HasPrefix(arg, "--") && !strings.Contains(string(help), arg) {
+			t.Errorf("installed agy no longer advertises required flag %s", arg)
+		}
 	}
 }
