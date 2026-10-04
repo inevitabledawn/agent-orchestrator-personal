@@ -24,7 +24,8 @@ func (s *Store) CreateReport(ctx context.Context, rec domain.ReportRecord) (doma
 		var err error
 		row, err = q.CreateReport(ctx, gen.CreateReportParams{
 			ID: rec.ID, SessionID: string(rec.SessionID), ProjectID: string(rec.ProjectID),
-			State: string(rec.State), Note: rec.Note, Message: rec.Message,
+			OrchestratorSessionID: string(rec.OrchestratorSessionID),
+			State:                 string(rec.State), Note: rec.Note, Message: rec.Message,
 			CreatedAt: rec.CreatedAt, AvailableAt: rec.AvailableAt,
 			SettlementDeadline: nullTime(rec.SettlementDeadline), RepeatCount: rec.RepeatCount,
 		})
@@ -47,6 +48,43 @@ func (s *Store) CreateReport(ctx context.Context, rec domain.ReportRecord) (doma
 	created := reportFromGen(row)
 	created.Outputs = append([]domain.ReportOutput(nil), rec.Outputs...)
 	return created, nil
+}
+
+// ClaimPendingReportBatchForOwner claims only reports owned by one coordinator.
+// An empty owner is the legacy project-coordinated group.
+func (s *Store) ClaimPendingReportBatchForOwner(ctx context.Context, projectID domain.ProjectID, ownerID domain.SessionID, token string, at time.Time) ([]domain.ReportRecord, error) {
+	if projectID == "" || token == "" || at.IsZero() {
+		return nil, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var rows []gen.Report
+	err := s.inTx(ctx, "claim orchestrator report batch", func(q *gen.Queries) error {
+		scheduled, err := q.ListPendingReportsByOwnerSchedule(ctx, gen.ListPendingReportsByOwnerScheduleParams{
+			ProjectID: string(projectID), OrchestratorSessionID: string(ownerID), Limit: 1,
+		})
+		if err != nil || len(scheduled) == 0 {
+			return err
+		}
+		batchID := scheduled[0].DeliveryBatchID
+		if batchID == "" {
+			batchID = "report-batch:" + scheduled[0].ID
+			if err := q.AssignPendingReportsToOwnerBatch(ctx, gen.AssignPendingReportsToOwnerBatchParams{
+				DeliveryBatchID: batchID, ProjectID: string(projectID), OrchestratorSessionID: string(ownerID),
+			}); err != nil {
+				return err
+			}
+		}
+		rows, err = q.ClaimPendingReportsByOwnerBatch(ctx, gen.ClaimPendingReportsByOwnerBatchParams{
+			ProjectID: string(projectID), OrchestratorSessionID: string(ownerID),
+			DeliveryBatchID: batchID, ClaimToken: token, ClaimedAt: nullTime(at),
+		})
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim orchestrator report batch: %w", err)
+	}
+	return s.reportsWithOutputs(ctx, orderedReportRows(rows))
 }
 
 // GetReport returns one report by durable ID with its ordered outputs.
@@ -305,7 +343,8 @@ func orderedReportRows(rows []gen.Report) []gen.Report {
 func reportFromGen(r gen.Report) domain.ReportRecord {
 	return domain.ReportRecord{
 		ID: r.ID, SessionID: domain.SessionID(r.SessionID), ProjectID: domain.ProjectID(r.ProjectID),
-		State: domain.ReportState(r.State), Note: r.Note, Message: r.Message, CreatedAt: r.CreatedAt,
+		OrchestratorSessionID: domain.SessionID(r.OrchestratorSessionID),
+		State:                 domain.ReportState(r.State), Note: r.Note, Message: r.Message, CreatedAt: r.CreatedAt,
 		DeliveryState: domain.ReportDeliveryState(r.DeliveryState), AvailableAt: r.AvailableAt,
 		SettlementDeadline: timeFromNull(r.SettlementDeadline), RepeatCount: r.RepeatCount,
 		ClaimToken: r.ClaimToken, ClaimedAt: timeFromNull(r.ClaimedAt), DeliveryAttempts: r.DeliveryAttempts,

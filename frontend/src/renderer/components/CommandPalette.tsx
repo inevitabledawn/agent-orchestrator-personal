@@ -606,6 +606,7 @@ export function CommandPalette() {
 						)}
 						<TaskComposer
 							projectId={view.projectId}
+							orchestratorId={currentSession?.kind === "orchestrator" && currentSession.workspaceId === view.projectId ? currentSession.id : undefined}
 							autoFocusTitle
 							onDirtyChange={onComposerDirtyChange}
 							onSubmittingChange={onComposerSubmittingChange}

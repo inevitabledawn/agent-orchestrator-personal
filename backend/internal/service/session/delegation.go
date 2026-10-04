@@ -28,6 +28,7 @@ const (
 // RequestedAgent means the spawn uses the project's worker-agent default.
 type DelegateTaskInput struct {
 	ProjectID      domain.ProjectID
+	OrchestratorID domain.SessionID
 	Brief          string
 	RequestedAgent domain.AgentHarness
 	Model          string
@@ -51,6 +52,15 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	if _, err := s.requireProject(ctx, in.ProjectID); err != nil {
 		return DelegateTaskOutcome{}, err
 	}
+	if in.OrchestratorID != "" {
+		owner, found, err := s.store.GetSession(ctx, in.OrchestratorID)
+		if err != nil {
+			return DelegateTaskOutcome{}, err
+		}
+		if !found || owner.ProjectID != in.ProjectID || owner.Kind != domain.KindOrchestrator || owner.IsTerminated || owner.Activity.State == domain.ActivityExited {
+			return DelegateTaskOutcome{}, apierr.Invalid("INVALID_ORCHESTRATOR_OWNER", "Orchestrator must be active in the same project", nil)
+		}
+	}
 	if in.RequestedAgent != "" && !in.RequestedAgent.IsKnown() {
 		return DelegateTaskOutcome{}, apierr.Invalid("UNKNOWN_HARNESS", "Unknown requested agent", nil)
 	}
@@ -64,11 +74,12 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 
 	effort, effortOverride := optionalTuningValue(in.Effort)
 	worker, _, _, err := s.manager.Spawn(ctx, ports.SpawnConfig{
-		ProjectID:   in.ProjectID,
-		Kind:        domain.KindWorker,
-		Harness:     in.RequestedAgent,
-		Prompt:      prompt,
-		DisplayName: delegatedTaskDisplayName(in.Brief),
+		ProjectID:       in.ProjectID,
+		ParentSessionID: in.OrchestratorID,
+		Kind:            domain.KindWorker,
+		Harness:         in.RequestedAgent,
+		Prompt:          prompt,
+		DisplayName:     delegatedTaskDisplayName(in.Brief),
 		AgentConfig: ports.AgentConfig{
 			Model:       strings.TrimSpace(in.Model),
 			Effort:      effort,
@@ -88,7 +99,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	if prompt != "" {
 		s.refineDelegatedTaskTitleInBackground(worker.ID, in)
 	}
-	return DelegateTaskOutcome{WorkerID: worker.ID}, nil
+	return DelegateTaskOutcome{OrchestratorID: in.OrchestratorID, WorkerID: worker.ID}, nil
 }
 
 func optionalTuningValue(value *string) (string, bool) {

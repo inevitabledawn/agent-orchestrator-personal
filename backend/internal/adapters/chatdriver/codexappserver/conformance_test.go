@@ -47,6 +47,8 @@ var driverMethods = []struct {
 	// Outbound: capabilities the driver advertises.
 	{codexproto.MethodModelList, &codexproto.ModelListParams{}},
 	{codexproto.MethodThreadCompactStart, &codexproto.ThreadCompactStartParams{}},
+	{codexproto.MethodThreadRevert, &codexproto.ThreadRevertParams{}},
+	{codexproto.MethodThreadTurnsList, &codexproto.ThreadTurnsListParams{}},
 	// Takes no params; the generated table records Params: "".
 	{codexproto.MethodAccountRateLimitsRead, nil},
 	{codexproto.MethodSkillsList, &codexproto.SkillsListParams{}},

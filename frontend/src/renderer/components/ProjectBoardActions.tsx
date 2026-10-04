@@ -16,11 +16,11 @@ export function ProjectBoardActions({ actions, placement, quiet = false, style }
 }) {
 	const { t } = useTranslation();
 	const { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError, canCreateAsTui,
-		openNewTask, openOrchestrator } = actions;
+		openNewTask, openOrchestrator, createOrchestrator } = actions;
 	const header = placement === "header";
 	const busy = isSpawning || isProjectRestarting || isProvisioning;
 	const activity = orchestrator ? getAgentActivityView(orchestrator.activity, t).label : undefined;
-	const actionLabel = orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
+	const actionLabel = t(header ? "shell.openOrchestrator" : "shell.spawnOrchestrator");
 	const busyLabel = isProjectRestarting ? t("shell.restartingDots") : isProvisioning
 		? t("shell.provisioningDots", { defaultValue: "Setting up…" }) : isSpawning ? t("shell.spawningDots") : undefined;
 	const orchestratorButton = (
@@ -28,17 +28,17 @@ export function ProjectBoardActions({ actions, placement, quiet = false, style }
 			<TooltipTrigger asChild>
 				<span className="inline-flex" style={style}>
 					<TopbarButton
-						aria-label={activity ? t("shell.orchestratorWithActivity", { activity }) : actionLabel}
+						aria-label={header && activity ? t("shell.orchestratorWithActivity", { activity }) : actionLabel}
 						aria-busy={busy}
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "secondary" : undefined}
 						disabled={busy}
-						onClick={() => openOrchestrator()}
+						onClick={() => header ? openOrchestrator() : createOrchestrator()}
 						variant={quiet ? "secondary" : "primary"}
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
-						{orchestrator ? <OrchestratorActivityIndicator session={orchestrator} /> : null}
+						{header && orchestrator ? <OrchestratorActivityIndicator session={orchestrator} /> : null}
 					</TopbarButton>
 				</span>
 			</TooltipTrigger>
@@ -70,7 +70,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, style }
 			<TopbarActionError role={header ? "alert" : "status"} className={header ? "max-w-content-max truncate" : "text-caption leading-body"} title={spawnError}>
 				{spawnError}
 			</TopbarActionError>
-			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style}>{t("newTask.createAsTui")}</TopbarButton> : null}
+			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => createOrchestrator("tui")} style={style}>{t("newTask.createAsTui")}</TopbarButton> : null}
 		</div>
 	) : null;
 	return header ? <>{feedback}{newTaskButton}{orchestratorButton}</> : <>

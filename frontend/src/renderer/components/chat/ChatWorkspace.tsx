@@ -1759,7 +1759,7 @@ function ChatHeader({
 						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
 						role="tablist"
 					>
-						{session ? (
+						{session && isOrchestratorSession(session) && workspaceTabActions ? null : session ? (
 							<SessionPaneTab
 								isActive={timelineActive}
 								label={label}

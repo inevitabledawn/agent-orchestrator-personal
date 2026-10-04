@@ -39,6 +39,7 @@ import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
+import { OrchestratorMenu } from "./OrchestratorMenu";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import {
 	ArchivedSessionCardAdapter,
@@ -47,6 +48,7 @@ import {
 } from "./SessionsBoardAdapters";
 
 type SessionsBoardProps = {
+	orchestrationOnly?: boolean;
 	/** When set, the board shows only this project's sessions. */
 	projectId?: string;
 };
@@ -69,7 +71,7 @@ const isMac = isMacPlatform();
 const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
-export function SessionsBoard({ projectId }: SessionsBoardProps) {
+export function SessionsBoard({ projectId, orchestrationOnly = false }: SessionsBoardProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -87,7 +89,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const workspaces = projectId ? all.filter((workspace) => workspace.id === projectId) : all;
 	const workspace = projectId ? workspaces[0] : undefined;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
-	const boardLabel = t("shell.board");
+	const boardLabel = t(orchestrationOnly ? "shell.orchestrator" : "shell.board");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
 	const sessions = usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
@@ -193,8 +195,8 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 
 			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
 			    board so lane height (and Needs You scrollbars) stay stable. */}
-			<div className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}>
-				{projectId && health.state !== "ok" ? (
+			<div className={cn("min-h-0 flex-1 overflow-hidden", !orchestrationOnly && hasArchive && archiveToggleOffsetClassName)}>
+				{!orchestrationOnly && projectId && health.state !== "ok" ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
 						<span className="min-w-0 flex-1">{health.message}</span>
@@ -230,6 +232,8 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 				<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
 			) : showWelcome ? (
 				<BoardWelcome />
+			) : orchestrationOnly && projectId ? (
+				<OrchestratorMenu projectId={projectId} sessions={workspace?.sessions ?? []} actions={projectActions} />
 			) : showProjectEmpty ? (
 				<ProjectBoardEmpty actions={<ProjectBoardActions actions={projectActions} placement="empty" />} />
 				) : (
@@ -250,7 +254,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 				)}
 			</div>
 
-			{hasArchive ? (
+			{!orchestrationOnly && hasArchive ? (
 				<BoardArchivePanel
 					activeProjectIdRef={activeProjectIdRef}
 					projectId={projectId}

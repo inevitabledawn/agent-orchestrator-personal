@@ -83,6 +83,8 @@ export type WorkspaceSession = {
 	/** Whether the daemon may automatically review this session after it becomes idle. */
 	autoReviewEnabled?: boolean;
 	kind?: SessionKind;
+	parallelOrchestrator?: boolean;
+	orchestratorSessionId?: string;
 	/**
 	 * Which controller is currently committed for this session. The session
 	 * surface renders from THIS value, never from the current creation default.
@@ -248,7 +250,11 @@ export function findProjectOrchestrator(
 }
 
 export function newestActiveOrchestrator(sessions: WorkspaceSession[]): WorkspaceSession | undefined {
-	const active = sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
+	const live = sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
+	// Preserve the legacy coordinator for project-wide actions, but a project
+	// with only parallel coordinators still has a live orchestrator.
+	const legacy = live.filter((session) => !session.parallelOrchestrator);
+	const active = legacy.length > 0 ? legacy : live;
 	return active.reduce<WorkspaceSession | undefined>(
 		(newest, session) => (!newest || sessionNewer(session, newest) ? session : newest),
 		undefined,
@@ -374,7 +380,7 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 			message: "Restarting orchestrator. New tasks wait until the replacement is ready.",
 		};
 	}
-	const active = workspace.sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
+	const active = workspace.sessions.filter((session) => isOrchestratorSession(session) && !session.parallelOrchestrator && sessionIsActive(session));
 	if (active.length > 1) {
 		return {
 			state: "duplicates",

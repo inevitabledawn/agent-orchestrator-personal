@@ -134,6 +134,7 @@ export function ShellTopbar({
 		orchestrator: supportsProjectActions ? orchestrator : undefined,
 		source: "topbar",
 		sessionId: currentSessionId,
+		taskOrchestratorId: isOrchestrator ? currentSessionId : undefined,
 	});
 	const { isSpawning, isProjectRestarting, isProvisioning, openNewTask, openOrchestrator } = projectActions;
 	const { showProjectEmpty } = useBoardPresentation({
@@ -144,7 +145,7 @@ export function ShellTopbar({
 		hasWorkerSessions: workspaceScope?.hasWorkerSessions ?? false,
 	});
 	const orchestratorTooltip = isProjectRestarting ? t("shell.restarting") : isSpawning
-		? t("shell.spawning") : orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
+		? t("shell.spawning") : t("shell.openOrchestrator");
 
 	const openBoard = () =>
 		projectId ? void navigate({ to: "/projects/$projectId", params: { projectId } }) : void navigate({ to: "/" });

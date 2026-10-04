@@ -659,12 +659,13 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 		emitted[name] = true
 		doc(b, name, s.Description)
 		fmt.Fprintf(b, "type %s string\n\nconst (\n", name)
+		used := map[string]bool{}
 		for _, v := range s.Enum {
 			str, ok := v.(string)
 			if !ok {
 				continue
 			}
-			fmt.Fprintf(b, "\t%s%s %s = %q\n", name, exportName(str), name, str)
+			fmt.Fprintf(b, "\t%s%s %s = %q\n", name, uniqueEnumName(str, used), name, str)
 		}
 		b.WriteString(")\n\n")
 		return
@@ -679,6 +680,7 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 			arms = s.AnyOf
 		}
 		seen := map[string]bool{}
+		used := map[string]bool{}
 		for _, a := range arms {
 			for _, v := range a.Enum {
 				str, ok := v.(string)
@@ -689,7 +691,7 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 				if a.Description != "" {
 					fmt.Fprintf(b, "\t// %s\n", oneLine(a.Description))
 				}
-				fmt.Fprintf(b, "\t%s%s %s = %q\n", name, exportName(str), name, str)
+				fmt.Fprintf(b, "\t%s%s %s = %q\n", name, uniqueEnumName(str, used), name, str)
 			}
 		}
 		b.WriteString(")\n\n")
@@ -954,13 +956,14 @@ func (g *generator) renderFlattenedUnion(
 	emitted[tagType] = true
 	fmt.Fprintf(b, "// %s is the discriminator of %s.\ntype %s string\n\nconst (\n", tagType, name, tagType)
 	seen := map[string]bool{}
+	enumUsed := map[string]bool{}
 	sort.Strings(tagValues)
 	for _, v := range tagValues {
 		if seen[v] {
 			continue
 		}
 		seen[v] = true
-		fmt.Fprintf(b, "\t%s%s %s = %q\n", tagType, exportName(v), tagType, v)
+		fmt.Fprintf(b, "\t%s%s %s = %q\n", tagType, uniqueEnumName(v, enumUsed), tagType, v)
 	}
 	b.WriteString(")\n\n")
 }
@@ -1001,6 +1004,18 @@ func oneLine(s string) string {
 		s = s[:limit] + "…"
 	}
 	return s
+}
+
+// uniqueEnumName preserves every wire value when punctuation and camel case
+// normalize to the same exported identifier (for example openai/form and openaiForm).
+func uniqueEnumName(value string, used map[string]bool) string {
+	base := exportName(value)
+	name := base
+	for suffix := 2; used[name]; suffix++ {
+		name = fmt.Sprintf("%s_%d", base, suffix)
+	}
+	used[name] = true
+	return name
 }
 
 // exportName turns a JSON or schema name into an exported Go identifier.

@@ -138,10 +138,8 @@ func capabilities() ports.ChatCapabilities {
 		// all: every turn re-sends the history, so context fills on its own and the
 		// only way back is to summarize what is already there.
 		ports.ChatCapabilityCompaction: true,
-		// History operations, all three exercised against a live app-server. Rollback
-		// is advertised despite thread/rollback carrying a DEPRECATED annotation:
-		// what the installed provider does is the only honest answer, and gating the
-		// feature off while the call still works would take undo away for no reason.
+		// History operations use the provider's current thread/revert, thread/fork,
+		// and thread/name/set methods. Revert changes conversation history only.
 		ports.ChatCapabilityRollback: true,
 		ports.ChatCapabilityFork:     true,
 		ports.ChatCapabilityRename:   true,

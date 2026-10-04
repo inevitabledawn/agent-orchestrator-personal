@@ -392,7 +392,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("shows a rejected orchestrator resume request", async () => {
+	it("opens the menu without resuming an exited orchestrator", async () => {
 		postMock.mockRejectedValueOnce(new Error("resume request failed"));
 		const exitedOrchestrator = {
 			...orchestrator,
@@ -403,8 +403,8 @@ describe("ShellTopbar orchestrator actions", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
-		expect(navigateMock).not.toHaveBeenCalled();
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/orchestrators", params: { projectId: "proj-1" } });
 	});
 
 	it("shows a clear Kanban button on embedded orchestrator sessions", async () => {
@@ -460,8 +460,7 @@ describe("ShellTopbar orchestrator actions", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/orchestrators", params: { projectId: "proj-1" } });
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
@@ -478,8 +477,8 @@ describe("ShellTopbar orchestrator actions", () => {
 
 		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "orch-1" },
+			to: "/projects/$projectId/orchestrators",
+			params: { projectId: "proj-1" },
 		});
 	});
 
@@ -502,8 +501,8 @@ describe("ShellTopbar orchestrator actions", () => {
 
 		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "orch-1" },
+			to: "/projects/$projectId/orchestrators",
+			params: { projectId: "proj-1" },
 		});
 	});
 

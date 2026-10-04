@@ -1638,6 +1638,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 
 	out, err := c.Svc.DelegateTask(r.Context(), sessionsvc.DelegateTaskInput{
 		ProjectID:      in.ProjectID,
+		OrchestratorID: in.OrchestratorID,
 		Brief:          domain.SanitizeControlChars(in.Brief),
 		RequestedAgent: in.Agent,
 		Model:          domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
@@ -1819,6 +1820,28 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 	}
 	if !in.ApprovalMode.Valid() {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
+		return
+	}
+	if in.Parallel && in.Clean {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "ORCHESTRATOR_MODE_CONFLICT", "parallel and clean cannot both be true", nil)
+		return
+	}
+	if in.Parallel {
+		parallelSvc, ok := c.Svc.(interface {
+			SpawnParallelOrchestrator(context.Context, domain.ProjectID, domain.SessionMode, domain.PermissionMode) (domain.Session, error)
+		})
+		if !ok {
+			envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "PARALLEL_ORCHESTRATOR_UNAVAILABLE", "Parallel orchestrators are unavailable", nil)
+			return
+		}
+		sess, err := parallelSvc.SpawnParallelOrchestrator(r.Context(), in.ProjectID, in.Mode, in.ApprovalMode)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		envelope.WriteJSON(w, http.StatusCreated, SpawnOrchestratorResponse{
+			Orchestrator: OrchestratorResponse{ID: sess.ID, ProjectID: sess.ProjectID},
+		})
 		return
 	}
 	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)

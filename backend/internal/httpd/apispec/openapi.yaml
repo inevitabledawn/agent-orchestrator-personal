@@ -9281,6 +9281,10 @@ components:
           type: string
         model:
           type: string
+        orchestratorSessionId:
+          type: string
+        parallelOrchestrator:
+          type: boolean
         pinnedAt:
           format: date-time
           type:
@@ -10159,6 +10163,8 @@ components:
           type: string
         model:
           maxLength: 256
+          type: string
+        orchestratorId:
           type: string
         projectId:
           type: string
@@ -12839,6 +12845,8 @@ components:
           - chat
           - tui
           type: string
+        parallel:
+          type: boolean
         projectId:
           type: string
       required:

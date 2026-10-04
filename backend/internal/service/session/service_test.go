@@ -2762,6 +2762,27 @@ func TestSpawnOrchestratorCleanRetiresActiveOrchestratorsBeforeSpawn(t *testing.
 	}
 }
 
+func TestParallelOrchestratorSpawnAndLegacyReplacementRemainIndependent(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindOrchestrator, ParallelOrchestrator: true}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnParallelOrchestrator(context.Background(), "mer", domain.SessionModeChat, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !fc.spawnedCfg.ParallelOrchestrator || fc.spawnedCfg.RequestedMode != domain.SessionModeChat || len(fc.retired) != 0 {
+		t.Fatalf("parallel spawn = %#v; retired = %v", fc.spawnedCfg, fc.retired)
+	}
+	if _, err := svc.SpawnOrchestrator(context.Background(), "mer", true, domain.SessionModeChat, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(fc.retired) != 1 || fc.retired[0] != "mer-1" {
+		t.Fatalf("legacy replacement retired %v, want only mer-1", fc.retired)
+	}
+}
+
 func TestSpawnOrchestratorCleanContinuesWhenRetireNoticeFails(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}

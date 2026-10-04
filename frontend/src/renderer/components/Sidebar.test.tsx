@@ -573,47 +573,12 @@ describe("Sidebar", () => {
 		expect(content).not.toContainElement(screen.getByText("Projects"));
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
-		const user = userEvent.setup();
-		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined }] });
-
-		await user.click(screen.getByRole("button", { name: "Spawn Project One orchestrator" }));
-
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
+	it.each([undefined, exitedOrchestrator])("opens the orchestration menu without creating or resuming a session: %s", async (orchestrator) => {
+		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined, sessions: orchestrator ? [orchestrator] : [] }] });
+		await userEvent.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/orchestrators", params: { projectId: "proj-1" } });
 		expect(spawnMock).not.toHaveBeenCalled();
-	});
-
-	// The sidebar owns its own openOrchestrator, separate from
-	// useProjectOrchestratorAction. Clicking Orchestrator on an orchestrator whose
-	// agent exited must resume it, not navigate to the dead terminal.
-	it("resumes an exited orchestrator instead of opening its dead terminal", async () => {
-		const user = userEvent.setup();
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [exitedOrchestrator] }] });
-
-		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
-
-		await waitFor(() => expect(resumeOrchestratorMock).toHaveBeenCalledWith("proj-1-orch"));
-		expect(spawnMock).not.toHaveBeenCalled();
-	});
-
-	it("does not open an exited orchestrator when resume fails", async () => {
-		const user = userEvent.setup();
-		const error = new Error("resume request failed");
-		useUiStore.getState().clearGlobalToast();
-		vi.spyOn(console, "error").mockImplementation(() => {});
-		resumeOrchestratorMock.mockRejectedValueOnce(error);
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [exitedOrchestrator] }] });
-
-		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
-
-		await waitFor(() => expect(console.error).toHaveBeenCalledWith("Failed to resume orchestrator:", error));
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(useUiStore.getState().globalToast).toMatchObject({
-			title: "Resume agent",
-			body: "resume request failed",
-			tone: "error",
-		});
+		expect(resumeOrchestratorMock).not.toHaveBeenCalled();
 	});
 
 	it("opens an exited orchestrator without resuming while its agent switch is active", async () => {
@@ -628,8 +593,8 @@ describe("Sidebar", () => {
 
 		expect(resumeOrchestratorMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
+			to: "/projects/$projectId/orchestrators",
+			params: { projectId: "proj-1" },
 		});
 	});
 
@@ -649,8 +614,8 @@ describe("Sidebar", () => {
 
 		expect(resumeOrchestratorMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
+			to: "/projects/$projectId/orchestrators",
+			params: { projectId: "proj-1" },
 		});
 	});
 
@@ -660,7 +625,7 @@ describe("Sidebar", () => {
 		try {
 			renderSidebar();
 
-			const spawnButton = screen.getByRole("button", { name: "Spawn Project One orchestrator" });
+			const spawnButton = screen.getByRole("button", { name: "Open Project One orchestrator" });
 			expect(spawnButton).toBeDisabled();
 			await user.click(spawnButton);
 
@@ -991,7 +956,7 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		expect(screen.queryByLabelText("Open Project One dashboard")).not.toBeInTheDocument();
-		expect(screen.getByLabelText("Spawn Project One orchestrator")).toBeInTheDocument();
+		expect(screen.getByLabelText("Open Project One orchestrator")).toBeInTheDocument();
 		expect(screen.getByLabelText("Project actions for Project One")).toBeInTheDocument();
 	});
 
@@ -1001,7 +966,7 @@ describe("Sidebar", () => {
 		const disclosure = screen.getByRole("button", { name: "Toggle Project One sessions" });
 		expect(disclosure.tagName).toBe("BUTTON");
 		expect(disclosure).toHaveProperty("tabIndex", 0);
-		expect(screen.getByLabelText("Spawn Project One orchestrator")).toHaveProperty("tabIndex", 0);
+		expect(screen.getByLabelText("Open Project One orchestrator")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Project actions for Project One")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Pin session")).toHaveProperty("tabIndex", 0);
 		expect(screen.queryByRole("button", { name: "Rename fix login" })).not.toBeInTheDocument();
@@ -1214,8 +1179,8 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
 
 		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "proj-1-orc" },
+			to: "/projects/$projectId/orchestrators",
+			params: { projectId: "proj-1" },
 		});
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "true");

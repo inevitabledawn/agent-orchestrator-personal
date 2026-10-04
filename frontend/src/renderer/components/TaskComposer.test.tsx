@@ -128,6 +128,35 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	it.each([
+		{ agent: "agy", model: "gemini-3.8-flash-high", effort: "" },
+		{ agent: "codex", model: "gpt-6.1-sol", effort: "medium" },
+	])("uses current worker settings over saved selections for $agent", async ({ agent, model, effort }) => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ "project-a": { lastAgent: "codex", agents: { codex: { model: "gpt-6-sol", mode: "", effort: "low" } } } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("agy", "Agy")] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent, selectionMode: "text", models: [], allowCustom: true, refreshRecommended: false } }
+			: { data: { status: "ok", project: { agent: "codex", config: { worker: { agent, agentConfig: { model, effort } } } } } });
+		h.post.mockResolvedValue({ data: { workerId: "worker-current-settings" } });
+		render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Use the configured worker" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ agent, model, ...(effort ? { effort } : {}) }) })));
+	});
+
+	it("sends the selected orchestrator when creating a local worker", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.post.mockResolvedValue({ data: { workerId: "worker-1" } });
+		render(<Wrap><TaskComposer projectId="proj-1" orchestratorId="orch-2" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Investigate the issue" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
+			"/api/v1/orchestrators/delegate",
+			expect.objectContaining({ body: expect.objectContaining({ orchestratorId: "orch-2" }) }),
+		));
+	});
 	it("preselects the highest-ranked ready agent for a standalone task", async () => {
 		h.agentCatalog = {
 			agents: [

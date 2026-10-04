@@ -156,11 +156,16 @@ type SessionMetadata struct {
 // facts: identity, agent harness, activity_state, is_terminated, and operational
 // metadata. The user-facing Status is derived from these facts plus PR facts.
 type SessionRecord struct {
-	ID        SessionID    `json:"id"`
-	ProjectID ProjectID    `json:"projectId,omitempty"`
-	IssueID   IssueID      `json:"issueId,omitempty"`
-	Kind      SessionKind  `json:"kind"`
-	Harness   AgentHarness `json:"harness,omitempty"`
+	ID        SessionID `json:"id"`
+	ProjectID ProjectID `json:"projectId,omitempty"`
+	// OrchestratorSessionID is the durable owner of a worker. Empty means a
+	// legacy, project-coordinated worker.
+	OrchestratorSessionID SessionID `json:"orchestratorSessionId,omitempty"`
+	// ParallelOrchestrator has a session-scoped conversation and unique worktree.
+	ParallelOrchestrator bool         `json:"parallelOrchestrator,omitempty"`
+	IssueID              IssueID      `json:"issueId,omitempty"`
+	Kind                 SessionKind  `json:"kind"`
+	Harness              AgentHarness `json:"harness,omitempty"`
 	// ReviewerHarness is this session's preferred reviewer. Empty delegates to
 	// the project configuration.
 	ReviewerHarness   ReviewerHarness `json:"reviewerHarness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`

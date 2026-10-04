@@ -120,7 +120,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 	}
 	rec := domain.ReportRecord{
 		ID: s.newID(), SessionID: session.ID, ProjectID: session.ProjectID,
-		State: input.State, Note: input.Note, Message: input.Message, Outputs: input.Outputs,
+		OrchestratorSessionID: session.OrchestratorSessionID,
+		State:                 input.State, Note: input.Note, Message: input.Message, Outputs: input.Outputs,
 		CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: availableAt,
 		SettlementDeadline: settlementDeadline, RepeatCount: 1,
 	}

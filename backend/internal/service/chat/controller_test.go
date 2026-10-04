@@ -60,6 +60,53 @@ func openStore(t *testing.T) *sqlite.Store {
 	return st
 }
 
+func TestParallelOrchestratorChatControllersKeepSeparateSessionHistories(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	var sessions []domain.SessionRecord
+	for range 2 {
+		rec, err := st.CreateSession(ctx, domain.SessionRecord{
+			ProjectID: testProject, Kind: domain.KindOrchestrator, ParallelOrchestrator: true,
+			Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, rec)
+	}
+	var nextID atomic.Int32
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{start: func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+			conversation := newFakeConversation()
+			conversation.providerConversationID = "provider-" + string(cfg.SessionID)
+			return conversation, nil
+		}}},
+		NewID: func() string { return fmt.Sprintf("parallel-%d", nextID.Add(1)) },
+		Log:   slog.New(slog.DiscardHandler),
+	})
+	t.Cleanup(func() { svc.StopAll(context.Background()) })
+	var histories []string
+	for _, rec := range sessions {
+		controller, err := svc.Start(ctx, chatsvc.StartConfig{
+			SessionID: rec.ID, ProjectID: testProject, Kind: domain.KindOrchestrator,
+			ParallelOrchestrator: true, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		owned, err := st.ConversationForSession(ctx, rec.ID)
+		if err != nil || owned.Scope != domain.ConversationScopeSession || owned.ID != controller.ConversationID() {
+			t.Fatalf("session %s history = %#v, %v", rec.ID, owned, err)
+		}
+		histories = append(histories, owned.ID)
+	}
+	if histories[0] == histories[1] {
+		t.Fatalf("parallel Chat controllers share history %q", histories[0])
+	}
+}
+
 func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 	return chatsvc.SnapshotReaderFunc(func(ctx context.Context, conversationID string) (chatsvc.ConversationRows, error) {
 		rows, err := st.LoadConversationSnapshot(ctx, conversationID)

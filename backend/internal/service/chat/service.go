@@ -442,7 +442,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 
 	scope := domain.ConversationScopeSession
-	if cfg.Kind == domain.KindOrchestrator {
+	if cfg.Kind == domain.KindOrchestrator && !cfg.ParallelOrchestrator {
 		scope = domain.ConversationScopeProject
 	}
 	now := s.now()

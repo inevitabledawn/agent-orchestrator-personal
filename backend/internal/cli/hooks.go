@@ -28,7 +28,7 @@ import (
 // sessionIDPattern bounds the AO_SESSION_ID we will place in a request path to
 // the id alphabet the daemon issues. Validating the externally-set env value
 // before it reaches the loopback URL keeps it from steering the request.
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 
 const (
 	// hooksLogName is the file under AO_DATA_DIR where hook delivery failures

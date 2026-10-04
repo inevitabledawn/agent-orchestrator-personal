@@ -44,19 +44,21 @@ type sessionRenameRequest struct {
 }
 
 type sessionDTO struct {
-	ID           string          `json:"id"`
-	ProjectID    string          `json:"projectId"`
-	IssueID      string          `json:"issueId,omitempty"`
-	Kind         string          `json:"kind"`
-	Harness      string          `json:"harness,omitempty"`
-	DisplayName  string          `json:"displayName,omitempty"`
-	Activity     sessionActivity `json:"activity"`
-	IsTerminated bool            `json:"isTerminated"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
-	Status       string          `json:"status"`
-	Branch       string          `json:"branch,omitempty"`
-	PRs          []sessionPRDTO  `json:"prs"`
+	ID                    string          `json:"id"`
+	ProjectID             string          `json:"projectId"`
+	IssueID               string          `json:"issueId,omitempty"`
+	Kind                  string          `json:"kind"`
+	OrchestratorSessionID string          `json:"orchestratorSessionId,omitempty"`
+	ParallelOrchestrator  bool            `json:"parallelOrchestrator,omitempty"`
+	Harness               string          `json:"harness,omitempty"`
+	DisplayName           string          `json:"displayName,omitempty"`
+	Activity              sessionActivity `json:"activity"`
+	IsTerminated          bool            `json:"isTerminated"`
+	CreatedAt             time.Time       `json:"createdAt"`
+	UpdatedAt             time.Time       `json:"updatedAt"`
+	Status                string          `json:"status"`
+	Branch                string          `json:"branch,omitempty"`
+	PRs                   []sessionPRDTO  `json:"prs"`
 }
 
 type sessionActivity struct {

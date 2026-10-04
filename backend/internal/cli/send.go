@@ -83,6 +83,11 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 	if session == "" {
 		return usageError{errors.New("usage: --session is required")}
 	}
+	if sender := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); sender != "" && !opts.recoverOnly {
+		if err := c.checkSendOwnership(ctx, sender, session); err != nil {
+			return err
+		}
+	}
 
 	// PathEscape: session ids are already "-"/digit safe, but may later come
 	// from sanitized issue refs; keep the URL well-formed regardless.
@@ -91,6 +96,38 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 		return c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message}, nil)
 	}
 	return c.steerMessage(ctx, path, message, strings.TrimSpace(opts.clientMessageID), opts.recoverOnly)
+}
+
+func (c *commandContext) checkSendOwnership(ctx context.Context, senderID, targetID string) error {
+	if senderID == targetID {
+		return nil
+	}
+	sender, err := c.fetchScopedSession(ctx, senderID, "")
+	if err != nil {
+		return fmt.Errorf("read sending session %s: %w", senderID, err)
+	}
+	target, err := c.fetchScopedSession(ctx, targetID, "")
+	if err != nil {
+		return fmt.Errorf("read target session %s: %w", targetID, err)
+	}
+	if sender.ProjectID == "" || sender.ProjectID != target.ProjectID {
+		return usageError{errors.New("cannot send between sessions in different projects")}
+	}
+	switch {
+	case sender.Kind == "orchestrator" && target.Kind == "worker":
+		if target.OrchestratorSessionID != senderID && (target.OrchestratorSessionID != "" || sender.ParallelOrchestrator) {
+			return usageError{fmt.Errorf("worker %s belongs to another orchestrator", targetID)}
+		}
+	case sender.Kind == "worker" && target.Kind == "orchestrator":
+		if sender.OrchestratorSessionID != targetID && (sender.OrchestratorSessionID != "" || target.ParallelOrchestrator) {
+			return usageError{fmt.Errorf("orchestrator %s does not own worker %s", targetID, senderID)}
+		}
+	case sender.Kind == "worker" && target.Kind == "worker":
+		if sender.OrchestratorSessionID != target.OrchestratorSessionID {
+			return usageError{fmt.Errorf("worker %s belongs to another orchestrator", targetID)}
+		}
+	}
+	return nil
 }
 
 func (c *commandContext) steerMessage(

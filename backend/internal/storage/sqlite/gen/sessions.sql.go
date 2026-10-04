@@ -144,7 +144,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
-    native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions
+    native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
+    orchestrator_session_id, parallel_orchestrator
 FROM sessions WHERE id = ?
 `
 
@@ -203,6 +204,8 @@ type GetSessionRow struct {
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -263,6 +266,8 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.Model,
 		&i.Effort,
 		&i.SessionPermissions,
+		&i.OrchestratorSessionID,
+		&i.ParallelOrchestrator,
 	)
 	return i, err
 }
@@ -279,9 +284,10 @@ INSERT INTO sessions (
     native_transcript_path,
     preview_url, preview_revision, terminate_on_pr_merge, cleanup_generation, browser_capability_verifier,
     session_mode, provider_conversation_id, controller_generation, model, effort, session_permissions,
-    created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci
+    created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
+    orchestrator_session_id, parallel_orchestrator
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 `
 
@@ -339,6 +345,8 @@ type InsertSessionParams struct {
 	PinnedAt                         sql.NullTime
 	AutoInjectReview                 bool
 	AutoInjectCI                     bool
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
@@ -396,6 +404,8 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.PinnedAt,
 		arg.AutoInjectReview,
 		arg.AutoInjectCI,
+		arg.OrchestratorSessionID,
+		arg.ParallelOrchestrator,
 	)
 	return err
 }
@@ -412,7 +422,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
-    native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions
+    native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
+    orchestrator_session_id, parallel_orchestrator
 FROM sessions ORDER BY project_id, num
 `
 
@@ -471,6 +482,8 @@ type ListAllSessionsRow struct {
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -537,6 +550,8 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.Model,
 			&i.Effort,
 			&i.SessionPermissions,
+			&i.OrchestratorSessionID,
+			&i.ParallelOrchestrator,
 		); err != nil {
 			return nil, err
 		}
@@ -563,7 +578,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
-    native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions
+    native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
+    orchestrator_session_id, parallel_orchestrator
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -622,6 +638,8 @@ type ListSessionsByProjectRow struct {
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -688,6 +706,8 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.Model,
 			&i.Effort,
 			&i.SessionPermissions,
+			&i.OrchestratorSessionID,
+			&i.ParallelOrchestrator,
 		); err != nil {
 			return nil, err
 		}

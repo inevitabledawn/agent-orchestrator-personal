@@ -55,6 +55,7 @@ type DelegateAgent = components["schemas"]["DelegateTaskRequest"]["agent"];
 
 type CreateTaskInput = {
 	projectId: string;
+	orchestratorId?: string;
 	brief: string;
 	agent?: DelegateAgent;
 	model?: string;
@@ -93,6 +94,7 @@ function hasErrorDetail(details: components["schemas"]["APIError"]["details"] | 
 
 export type TaskComposerProps = {
 	projectId?: string;
+	orchestratorId?: string;
 	onCreated: (sessionId: string) => void;
 	onDirtyChange?: (dirty: boolean) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
@@ -101,6 +103,7 @@ export type TaskComposerProps = {
 
 export function TaskComposer({
 	projectId,
+	orchestratorId,
 	onCreated,
 	onDirtyChange,
 	onSubmittingChange,
@@ -193,6 +196,7 @@ export function TaskComposer({
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: {
 						projectId: input.projectId,
+						...(input.orchestratorId ? { orchestratorId: input.orchestratorId } : {}),
 						brief: input.brief,
 						agent: input.agent,
 						...(input.model ? { model: input.model } : {}),
@@ -333,7 +337,9 @@ export function TaskComposer({
 	const rememberedAgentIsAvailable = Boolean(
 		availableAgents?.some((candidate) => candidate.id === rememberedAgent && isReadyAgent(candidate)),
 	);
-	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
+	// Explicit project defaults take precedence over choices saved before the
+	// user changed Settings. Standalone tasks still remember their last agent.
+	const defaultWorkerAgent = projectWorkerAgent || (rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent);
 	const selectedAgent = agent || defaultWorkerAgent;
 	useEnsureAgentReadiness();
 	useEnsureAgentReadiness({
@@ -417,12 +423,12 @@ export function TaskComposer({
 	const rememberedModeIsValid =
 		rememberedMode !== "" && catalogModels.some((item) => item.id === rememberedMode);
 	const defaultModelForSelectedAgent =
-		(rememberedModelIsValid ? rememberedModel : "") ||
 		projectModelForSelectedAgent ||
+		(rememberedModelIsValid ? rememberedModel : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption);
 	const defaultModeForSelectedAgent =
-		(rememberedModeIsValid ? rememberedMode : "") ||
 		projectModeForSelectedAgent ||
+		(rememberedModeIsValid ? rememberedMode : "") ||
 		(catalogUsesModes ? catalogDefaultOption : "");
 	const selectedModel = model || defaultModelForSelectedAgent;
 	const selectedMode = mode || defaultModeForSelectedAgent;
@@ -430,10 +436,10 @@ export function TaskComposer({
 		rememberedConfigForSelectedAgent &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
 	);
-	const defaultEffortForSelectedAgent = rememberedEffortIsExplicit
-		? (rememberedConfigForSelectedAgent?.effort ?? "")
-		: selectedAgent === configuredProjectAgent
-			? defaultWorkerEffort
+	const defaultEffortForSelectedAgent = selectedAgent === configuredProjectAgent && defaultWorkerEffort !== ""
+		? defaultWorkerEffort
+		: rememberedEffortIsExplicit
+			? (rememberedConfigForSelectedAgent?.effort ?? "")
 			: "";
 	const { selected: effortModel } = useModelTuning({
 		models: catalogModels,
@@ -532,8 +538,9 @@ export function TaskComposer({
 			}
 			const attachmentPayloads = await toSettledPayload();
 			const sessionId = await createTask({
-				projectId,
-				brief,
+					projectId,
+					orchestratorId,
+					brief,
 				// The visible selection is authoritative: it is either the user's pick
 				// or the resolved default, so spawning names it explicitly.
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,

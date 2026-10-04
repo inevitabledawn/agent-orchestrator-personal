@@ -15,7 +15,7 @@ const acknowledgeReport = `-- name: AcknowledgeReport :one
 UPDATE reports
 SET delivery_state = 'acknowledged', acknowledged_at = ?1
 WHERE id = ?2 AND delivery_state = 'claimed' AND claim_token = ?3
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type AcknowledgeReportParams struct {
@@ -45,6 +45,7 @@ func (q *Queries) AcknowledgeReport(ctx context.Context, arg AcknowledgeReportPa
 		&i.AcknowledgedAt,
 		&i.LastError,
 		&i.DeliveryBatchID,
+		&i.OrchestratorSessionID,
 	)
 	return i, err
 }
@@ -54,7 +55,7 @@ UPDATE reports
 SET delivery_state = 'acknowledged', acknowledged_at = ?1
 WHERE project_id = ?2 AND delivery_state = 'claimed'
   AND claim_token = ?3
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type AcknowledgeReportBatchParams struct {
@@ -90,6 +91,7 @@ func (q *Queries) AcknowledgeReportBatch(ctx context.Context, arg AcknowledgeRep
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -121,6 +123,24 @@ func (q *Queries) AssignPendingReportsToBatch(ctx context.Context, arg AssignPen
 	return err
 }
 
+const assignPendingReportsToOwnerBatch = `-- name: AssignPendingReportsToOwnerBatch :exec
+UPDATE reports SET delivery_batch_id = ?
+WHERE project_id = ?
+  AND orchestrator_session_id = ?
+  AND delivery_state = 'pending' AND delivery_batch_id = ''
+`
+
+type AssignPendingReportsToOwnerBatchParams struct {
+	DeliveryBatchID       string
+	ProjectID             string
+	OrchestratorSessionID string
+}
+
+func (q *Queries) AssignPendingReportsToOwnerBatch(ctx context.Context, arg AssignPendingReportsToOwnerBatchParams) error {
+	_, err := q.db.ExecContext(ctx, assignPendingReportsToOwnerBatch, arg.DeliveryBatchID, arg.ProjectID, arg.OrchestratorSessionID)
+	return err
+}
+
 const claimPendingReportsByBatch = `-- name: ClaimPendingReportsByBatch :many
 UPDATE reports
 SET delivery_state = 'claimed', claim_token = ?1,
@@ -128,7 +148,7 @@ SET delivery_state = 'claimed', claim_token = ?1,
     last_error = ''
 WHERE project_id = ?3 AND delivery_state = 'pending'
   AND delivery_batch_id = ?4
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type ClaimPendingReportsByBatchParams struct {
@@ -170,6 +190,74 @@ func (q *Queries) ClaimPendingReportsByBatch(ctx context.Context, arg ClaimPendi
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const claimPendingReportsByOwnerBatch = `-- name: ClaimPendingReportsByOwnerBatch :many
+UPDATE reports
+SET delivery_state = 'claimed', claim_token = ?,
+    claimed_at = ?, delivery_attempts = delivery_attempts + 1,
+    last_error = ''
+WHERE project_id = ?
+  AND orchestrator_session_id = ?
+  AND delivery_state = 'pending' AND delivery_batch_id = ?
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
+`
+
+type ClaimPendingReportsByOwnerBatchParams struct {
+	ClaimToken            string
+	ClaimedAt             sql.NullTime
+	ProjectID             string
+	OrchestratorSessionID string
+	DeliveryBatchID       string
+}
+
+func (q *Queries) ClaimPendingReportsByOwnerBatch(ctx context.Context, arg ClaimPendingReportsByOwnerBatchParams) ([]Report, error) {
+	rows, err := q.db.QueryContext(ctx, claimPendingReportsByOwnerBatch,
+		arg.ClaimToken,
+		arg.ClaimedAt,
+		arg.ProjectID,
+		arg.OrchestratorSessionID,
+		arg.DeliveryBatchID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Report{}
+	for rows.Next() {
+		var i Report
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.ProjectID,
+			&i.State,
+			&i.Note,
+			&i.Message,
+			&i.CreatedAt,
+			&i.DeliveryState,
+			&i.AvailableAt,
+			&i.SettlementDeadline,
+			&i.RepeatCount,
+			&i.ClaimToken,
+			&i.ClaimedAt,
+			&i.DeliveryAttempts,
+			&i.AcknowledgedAt,
+			&i.LastError,
+			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -190,7 +278,7 @@ SET delivery_state = 'claimed', claim_token = ?1,
     claimed_at = ?2, delivery_attempts = delivery_attempts + 1,
     last_error = ''
 WHERE id = ?3 AND delivery_state = 'pending' AND available_at <= ?2
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type ClaimReportParams struct {
@@ -220,6 +308,7 @@ func (q *Queries) ClaimReport(ctx context.Context, arg ClaimReportParams) (Repor
 		&i.AcknowledgedAt,
 		&i.LastError,
 		&i.DeliveryBatchID,
+		&i.OrchestratorSessionID,
 	)
 	return i, err
 }
@@ -227,23 +316,24 @@ func (q *Queries) ClaimReport(ctx context.Context, arg ClaimReportParams) (Repor
 const createReport = `-- name: CreateReport :one
 INSERT INTO reports (
     id, session_id, project_id, state, note, message, created_at, available_at,
-    settlement_deadline, repeat_count
+    settlement_deadline, repeat_count, orchestrator_session_id
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type CreateReportParams struct {
-	ID                 string
-	SessionID          string
-	ProjectID          string
-	State              string
-	Note               string
-	Message            string
-	CreatedAt          time.Time
-	AvailableAt        time.Time
-	SettlementDeadline sql.NullTime
-	RepeatCount        int64
+	ID                    string
+	SessionID             string
+	ProjectID             string
+	State                 string
+	Note                  string
+	Message               string
+	CreatedAt             time.Time
+	AvailableAt           time.Time
+	SettlementDeadline    sql.NullTime
+	RepeatCount           int64
+	OrchestratorSessionID string
 }
 
 func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Report, error) {
@@ -258,6 +348,7 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		arg.AvailableAt,
 		arg.SettlementDeadline,
 		arg.RepeatCount,
+		arg.OrchestratorSessionID,
 	)
 	var i Report
 	err := row.Scan(
@@ -278,6 +369,7 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		&i.AcknowledgedAt,
 		&i.LastError,
 		&i.DeliveryBatchID,
+		&i.OrchestratorSessionID,
 	)
 	return i, err
 }
@@ -312,7 +404,7 @@ SET delivery_state = 'pending', available_at = max(available_at, ?1),
     claim_token = '', claimed_at = NULL, last_error = ?2
 WHERE project_id = ?3 AND delivery_state = 'claimed'
   AND claim_token = ?4
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type DeferReportBatchParams struct {
@@ -354,6 +446,7 @@ func (q *Queries) DeferReportBatch(ctx context.Context, arg DeferReportBatchPara
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -369,7 +462,7 @@ func (q *Queries) DeferReportBatch(ctx context.Context, arg DeferReportBatchPara
 }
 
 const getReport = `-- name: GetReport :one
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports WHERE id = ?
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id FROM reports WHERE id = ?
 `
 
 func (q *Queries) GetReport(ctx context.Context, id string) (Report, error) {
@@ -393,6 +486,7 @@ func (q *Queries) GetReport(ctx context.Context, id string) (Report, error) {
 		&i.AcknowledgedAt,
 		&i.LastError,
 		&i.DeliveryBatchID,
+		&i.OrchestratorSessionID,
 	)
 	return i, err
 }
@@ -409,8 +503,15 @@ func (q *Queries) GetReportInterrupt(ctx context.Context, sessionID string) (tim
 }
 
 const listPendingReportSchedule = `-- name: ListPendingReportSchedule :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
-WHERE delivery_state = 'pending'
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id FROM reports AS r
+WHERE r.delivery_state = 'pending'
+  AND r.id = (
+    SELECT first.id FROM reports AS first
+    WHERE first.project_id = r.project_id
+      AND first.orchestrator_session_id = r.orchestrator_session_id
+      AND first.delivery_state = 'pending'
+    ORDER BY first.available_at, first.created_at, first.id LIMIT 1
+  )
 ORDER BY available_at, created_at, id
 LIMIT ?
 `
@@ -442,6 +543,7 @@ func (q *Queries) ListPendingReportSchedule(ctx context.Context, limit int64) ([
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -457,7 +559,7 @@ func (q *Queries) ListPendingReportSchedule(ctx context.Context, limit int64) ([
 }
 
 const listPendingReports = `-- name: ListPendingReports :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id FROM reports
 WHERE delivery_state = 'pending' AND available_at <= ?
 ORDER BY created_at, id
 LIMIT ?
@@ -495,6 +597,64 @@ func (q *Queries) ListPendingReports(ctx context.Context, arg ListPendingReports
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingReportsByOwnerSchedule = `-- name: ListPendingReportsByOwnerSchedule :many
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id FROM reports
+WHERE project_id = ?
+  AND orchestrator_session_id = ?
+  AND delivery_state = 'pending'
+ORDER BY available_at, created_at, id
+LIMIT ?
+`
+
+type ListPendingReportsByOwnerScheduleParams struct {
+	ProjectID             string
+	OrchestratorSessionID string
+	Limit                 int64
+}
+
+func (q *Queries) ListPendingReportsByOwnerSchedule(ctx context.Context, arg ListPendingReportsByOwnerScheduleParams) ([]Report, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingReportsByOwnerSchedule, arg.ProjectID, arg.OrchestratorSessionID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Report{}
+	for rows.Next() {
+		var i Report
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.ProjectID,
+			&i.State,
+			&i.Note,
+			&i.Message,
+			&i.CreatedAt,
+			&i.DeliveryState,
+			&i.AvailableAt,
+			&i.SettlementDeadline,
+			&i.RepeatCount,
+			&i.ClaimToken,
+			&i.ClaimedAt,
+			&i.DeliveryAttempts,
+			&i.AcknowledgedAt,
+			&i.LastError,
+			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -510,7 +670,7 @@ func (q *Queries) ListPendingReports(ctx context.Context, arg ListPendingReports
 }
 
 const listPendingReportsByProjectSchedule = `-- name: ListPendingReportsByProjectSchedule :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id FROM reports
 WHERE project_id = ? AND delivery_state = 'pending'
 ORDER BY available_at, created_at, id
 LIMIT ?
@@ -548,6 +708,7 @@ func (q *Queries) ListPendingReportsByProjectSchedule(ctx context.Context, arg L
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -596,7 +757,7 @@ func (q *Queries) ListReportOutputs(ctx context.Context, reportID string) ([]Rep
 }
 
 const listReportsByProject = `-- name: ListReportsByProject :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports WHERE project_id = ? ORDER BY created_at, id
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id FROM reports WHERE project_id = ? ORDER BY created_at, id
 `
 
 func (q *Queries) ListReportsByProject(ctx context.Context, projectID string) ([]Report, error) {
@@ -626,6 +787,7 @@ func (q *Queries) ListReportsByProject(ctx context.Context, projectID string) ([
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -641,7 +803,7 @@ func (q *Queries) ListReportsByProject(ctx context.Context, projectID string) ([
 }
 
 const listReportsBySession = `-- name: ListReportsBySession :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports WHERE session_id = ? ORDER BY created_at, id
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id FROM reports WHERE session_id = ? ORDER BY created_at, id
 `
 
 func (q *Queries) ListReportsBySession(ctx context.Context, sessionID string) ([]Report, error) {
@@ -671,6 +833,7 @@ func (q *Queries) ListReportsBySession(ctx context.Context, sessionID string) ([
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -706,7 +869,7 @@ UPDATE reports
 SET delivery_state = 'pending', available_at = ?1,
     claim_token = '', claimed_at = NULL, last_error = ?2
 WHERE id = ?3 AND delivery_state = 'claimed' AND claim_token = ?4
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type ReleaseReportParams struct {
@@ -742,6 +905,7 @@ func (q *Queries) ReleaseReport(ctx context.Context, arg ReleaseReportParams) (R
 		&i.AcknowledgedAt,
 		&i.LastError,
 		&i.DeliveryBatchID,
+		&i.OrchestratorSessionID,
 	)
 	return i, err
 }
@@ -752,7 +916,7 @@ SET delivery_state = 'pending', available_at = min(available_at, ?1),
     claim_token = '', claimed_at = NULL, last_error = ?2
 WHERE project_id = ?3 AND delivery_state = 'claimed'
   AND claim_token = ?4
-RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
+RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id, orchestrator_session_id
 `
 
 type ReleaseReportBatchParams struct {
@@ -794,6 +958,7 @@ func (q *Queries) ReleaseReportBatch(ctx context.Context, arg ReleaseReportBatch
 			&i.AcknowledgedAt,
 			&i.LastError,
 			&i.DeliveryBatchID,
+			&i.OrchestratorSessionID,
 		); err != nil {
 			return nil, err
 		}

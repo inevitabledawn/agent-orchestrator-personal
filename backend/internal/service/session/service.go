@@ -275,7 +275,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		unlock := s.lockOrchestratorProject(cfg.ProjectID)
 		defer unlock()
 
-		existing, err := s.activeOrchestrators(ctx, cfg.ProjectID)
+		existing, err := s.activeLegacyOrchestrators(ctx, cfg.ProjectID)
 		if err != nil {
 			return domain.Session{}, 0, 0, err
 		}
@@ -508,7 +508,7 @@ func (s *Service) SpawnOrchestrator(
 	}
 	mode := requestedMode
 	if clean {
-		existing, err := s.activeOrchestrators(ctx, projectID)
+		existing, err := s.activeLegacyOrchestrators(ctx, projectID)
 		if err != nil {
 			return domain.Session{}, err
 		}
@@ -527,7 +527,7 @@ func (s *Service) SpawnOrchestrator(
 			}
 		}
 	} else {
-		existing, err := s.activeOrchestrators(ctx, projectID)
+		existing, err := s.activeLegacyOrchestrators(ctx, projectID)
 		if err != nil {
 			return domain.Session{}, err
 		}
@@ -552,9 +552,39 @@ func (s *Service) SpawnOrchestrator(
 	return sess, nil
 }
 
+// SpawnParallelOrchestrator starts an independent coordinator without changing
+// the project's legacy orchestrator or its conversation owner.
+func (s *Service) SpawnParallelOrchestrator(ctx context.Context, projectID domain.ProjectID, mode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error) {
+	unlock := s.lockOrchestratorProject(projectID)
+	defer unlock()
+	if _, err := s.requireProject(ctx, projectID); err != nil {
+		return domain.Session{}, err
+	}
+	sess, _, _, err := s.spawn(ctx, ports.SpawnConfig{
+		ProjectID: projectID, Kind: domain.KindOrchestrator,
+		ParallelOrchestrator: true, RequestedMode: mode,
+		AgentConfig: ports.AgentConfig{Permissions: approval},
+	})
+	return sess, err
+}
+
 func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.ProjectID) ([]domain.Session, error) {
 	active := true
 	return s.List(ctx, ListFilter{ProjectID: projectID, Active: &active, OrchestratorOnly: true})
+}
+
+func (s *Service) activeLegacyOrchestrators(ctx context.Context, projectID domain.ProjectID) ([]domain.Session, error) {
+	all, err := s.activeOrchestrators(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	legacy := make([]domain.Session, 0, len(all))
+	for _, session := range all {
+		if !session.ParallelOrchestrator {
+			legacy = append(legacy, session)
+		}
+	}
+	return legacy, nil
 }
 
 const orchestratorRetireNotice = "AO is replacing this project orchestrator. Stop coordinating new work now; a fresh orchestrator will take over in a new workspace."

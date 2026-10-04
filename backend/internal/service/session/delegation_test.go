@@ -80,6 +80,28 @@ func TestDelegateTaskSpawnsWorkerAndRefinesTitleThroughBackgroundHarness(t *test
 	}
 }
 
+func TestDelegateTaskBindsOnlyToActiveSameProjectOrchestrator(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.sessions["ao-a"] = domain.SessionRecord{ID: "ao-a", ProjectID: "ao", Kind: domain.KindOrchestrator}
+	st.sessions["other-b"] = domain.SessionRecord{ID: "other-b", ProjectID: "other", Kind: domain.KindOrchestrator}
+	st.sessions["ao-dead"] = domain.SessionRecord{ID: "ao-dead", ProjectID: "ao", Kind: domain.KindOrchestrator, IsTerminated: true}
+	cmd := &fakeCommander{}
+	svc := &Service{store: st, manager: cmd}
+	for _, owner := range []domain.SessionID{"other-b", "ao-dead", "missing"} {
+		if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", OrchestratorID: owner}); err == nil {
+			t.Fatalf("accepted invalid owner %s", owner)
+		}
+	}
+	if cmd.spawnCalls != 0 {
+		t.Fatalf("invalid owners spawned %d workers", cmd.spawnCalls)
+	}
+	out, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", OrchestratorID: "ao-a"})
+	if err != nil || cmd.spawnedCfg.ParentSessionID != "ao-a" || out.OrchestratorID != "ao-a" {
+		t.Fatalf("valid delegated owner = %#v, cfg = %#v, err = %v", out, cmd.spawnedCfg, err)
+	}
+}
+
 func TestDelegatedTaskTitles(t *testing.T) {
 	for _, tt := range []struct {
 		name string
