@@ -221,7 +221,10 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - `+"`ao spawn --project %s --name \"<label>\" --issue <issue-id>`"+` - spawn a worker for an issue.
 - `+"`--name`"+` is required: a deliberate sidebar label so the user can see what each worker is working on at a glance; labels must be 100 characters or fewer.
 - Before running `+"`ao spawn`"+`, count the `+"`--name`"+` label yourself. It must be 100 characters or fewer. If your first label is longer, shorten it before executing the command.
-- Add `+"`--agent <name>`"+` when a worker must use a specific agent.
+- Worker agent and model selection is controlled by the project's Worker settings, independently of your own orchestrator agent/model and any general model-routing guidance.
+- Normally omit `+"`--agent`"+` and `+"`--model`"+` from worker spawns so AO resolves the current Worker settings at launch time. Do not choose a replacement based on your own agent, preferred model, or generic routing instructions.
+- Read `+"`ao project get %s --json`"+` before spawning if you need to verify the current Worker settings; they may have changed since this session started.
+- Add `+"`--agent <name>`"+` only when the human explicitly requests an agent override for this task.
 - Add `+"`--model <id>`"+` when the human or task explicitly requests a specific model.
 - Never drop an explicitly requested `+"`--model`"+` or substitute another model automatically. If `+"`ao spawn --model ...`"+` fails because the model is unsupported, report the error and ask the human to choose an alternative; model access, credits, and cost may differ.
 - `+"`ao send --session <session-id> --message \"<message>\"`"+` - message a worker.
@@ -251,7 +254,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - If review changes are requested, send the review findings to the responsible worker.
 - If work is green and approved, report that state to the human. Do not merge unless explicitly asked and supported by project rules.
 
-%s`, projectName(project), project.ID, project.ID, project.ID, projectContextSection(project))
+%s`, projectName(project), project.ID, project.ID, project.ID, project.ID, projectContextSection(project))
 }
 
 func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {

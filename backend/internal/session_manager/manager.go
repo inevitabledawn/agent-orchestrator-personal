@@ -5119,6 +5119,12 @@ func (m *Manager) buildSystemPromptForOwner(ctx context.Context, kind domain.Ses
 	switch kind {
 	case domain.KindOrchestrator:
 		cfg.OrchestratorRules = project.Config.OrchestratorRules
+		worker := project.Config.Worker
+		workerConfig := effectiveAgentConfig(worker.Harness, domain.KindWorker, project.Config)
+		cfg.AdditionalSections = append(cfg.AdditionalSections, fmt.Sprintf(
+			"## Configured Worker Defaults\n\nWorker agent: %q. Worker model: %q. Worker effort: %q.\nThese are the project settings at session start, not your own orchestrator settings. Omit --agent and --model on ordinary worker spawns to use the latest settings; an empty model lets the worker agent choose its default.",
+			worker.Harness, workerConfig.Model, workerConfig.Effort,
+		))
 	case domain.KindWorker:
 		if projectID != "" {
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)

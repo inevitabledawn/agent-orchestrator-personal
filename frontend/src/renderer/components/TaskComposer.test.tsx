@@ -145,6 +145,27 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	it.each([
+		{ agent: "agy", model: "gemini-3.8-flash-high", effort: "" },
+		{ agent: "codex", model: "gpt-6.1-sol", effort: "medium" },
+	])("uses current worker settings over saved selections for $agent", async ({ agent, model, effort }) => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ "project-a": { lastAgent: "codex", agents: { codex: { model: "gpt-6-sol", mode: "", effort: "low" } } } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("agy", "Agy")] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent, selectionMode: "text", models: [], allowCustom: true, refreshRecommended: false } }
+			: { data: { status: "ok", project: { agent: "codex", config: { worker: { agent, agentConfig: { model, effort } } } } } });
+		h.post.mockResolvedValue({ data: { workerId: "worker-current-settings" } });
+		render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", agent));
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent(model);
+		fireEvent.change(task(), { target: { value: "Use the configured worker" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ agent }) })));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
+	});
+
 	it("sends the selected orchestrator when creating a local worker", async () => {
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
 		h.post.mockResolvedValue({ data: { workerId: "worker-1" } });

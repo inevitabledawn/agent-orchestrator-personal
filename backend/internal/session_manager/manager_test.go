@@ -5512,6 +5512,24 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 	}
 }
 
+func TestOrchestratorPromptUsesProjectWorkerDefaults(t *testing.T) {
+	cfg := testRoleAgents()
+	cfg.Worker.Harness = "agy"
+	cfg.Worker.AgentConfig.Model = "gemini-3.8-flash-high"
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: cfg}
+	m := New(Deps{Store: st})
+	prompt, err := m.buildSystemPrompt(context.Background(), domain.KindOrchestrator, "mer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`Worker agent: "agy"`, `Worker model: "gemini-3.8-flash-high"`, "Omit --agent and --model", "ao project get mer --json", "## In-App Session Links"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing worker routing guidance %q", want)
+		}
+	}
+}
+
 func TestSpawnOrchestrator_ProjectRulesInSystemPrompt(t *testing.T) {
 	cfg := testRoleAgents()
 	cfg.AgentRules = "Worker-only rule."
