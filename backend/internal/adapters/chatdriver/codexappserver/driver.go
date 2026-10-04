@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
@@ -85,6 +86,10 @@ type Driver struct {
 	versionProbe versionProbeFunc
 	persistent   bool
 	connectHost  persistentConnectFunc
+	schemaProbe  func(context.Context, string) (map[string]string, error)
+	protocolMu   sync.Mutex
+	protocolKey  string
+	protocol     *protocolProfile
 }
 
 // New builds a Chat driver over the existing Codex agent plugin.
@@ -94,7 +99,7 @@ func New(plugin codexPlugin, log *slog.Logger) *Driver {
 	}
 	return &Driver{
 		plugin: plugin, log: log, spawn: spawnAppServer,
-		versionProbe: installedCodexVersion, persistent: true, connectHost: persistenthost.ConnectOrStart,
+		schemaProbe: exportInstalledProtocol, versionProbe: installedCodexVersion, persistent: true, connectHost: persistenthost.ConnectOrStart,
 	}
 }
 
@@ -138,10 +143,8 @@ func capabilities() ports.ChatCapabilities {
 		// all: every turn re-sends the history, so context fills on its own and the
 		// only way back is to summarize what is already there.
 		ports.ChatCapabilityCompaction: true,
-		// History operations, all three exercised against a live app-server. Rollback
-		// is advertised despite thread/rollback carrying a DEPRECATED annotation:
-		// what the installed provider does is the only honest answer, and gating the
-		// feature off while the call still works would take undo away for no reason.
+		// History operations use the provider's current thread/revert, thread/fork,
+		// and thread/name/set methods. Revert changes conversation history only.
 		ports.ChatCapabilityRollback: true,
 		ports.ChatCapabilityFork:     true,
 		ports.ChatCapabilityRename:   true,
@@ -214,7 +217,7 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, fmt.Errorf("%w: model/list: %w", ports.ErrChatDriverIncompatible, err)
 	}
 
-	return capabilities(), nil
+	return conv.Capabilities(), nil
 }
 
 // DiscoverModels reads the account's current provider catalog without opening
@@ -426,12 +429,18 @@ func (d *Driver) connect(ctx context.Context, workdir string, env map[string]str
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
 
+	profile, err := d.installedProtocol(ctx, bin)
+	if err != nil {
+		return nil, err
+	}
+
 	proc, err := d.spawn(ctx, bin, workdir, codexProcessEnv(ctx, bin, env))
 	if err != nil {
 		return nil, fmt.Errorf("%w: launch app-server: %w", ports.ErrChatDriverUnavailable, err)
 	}
 
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.applyProtocol(profile)
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Close()
 		return nil, err
@@ -507,7 +516,26 @@ func (d *Driver) connectSession(
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
 	if transport.Reconnected {
+		profile, err := loadHostProtocol(dataDir, string(sessionID), transport.InstanceID)
+		if err != nil {
+			d.log.Warn("saved Codex protocol unavailable; preserving host with core capabilities", "error", err)
+		}
+		if profile == nil {
+			d.log.Warn("reconnected Codex host has no matching protocol snapshot; limiting to core capabilities")
+			profile = coreOnlyProtocol()
+		}
+		conv.applyProtocol(profile)
 		return conv, true, nil
+	}
+	profile, err := d.installedProtocol(ctx, bin)
+	if err != nil {
+		_ = conv.Terminate()
+		return nil, false, err
+	}
+	conv.applyProtocol(profile)
+	if err := saveHostProtocol(dataDir, string(sessionID), transport.InstanceID, profile); err != nil {
+		_ = conv.Terminate()
+		return nil, false, fmt.Errorf("save Codex protocol snapshot: %w", err)
 	}
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()

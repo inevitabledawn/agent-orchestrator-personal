@@ -124,6 +124,8 @@ type ACPState struct {
 
 // Transport is one authenticated attachment to a persistent provider host.
 type Transport struct {
+	// InstanceID binds adapter metadata to this process, across daemon reconnects.
+	InstanceID    string
 	Stdin         io.WriteCloser
 	Stdout        io.Reader
 	Reconnected   bool
@@ -467,7 +469,8 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 		}
 	}
 	return &Transport{
-		Stdin: conn, Stdout: reader, Reconnected: reconnected,
+		InstanceID: fmt.Sprintf("%d:%s", d.PID, d.StartedAt.UTC().Format(time.RFC3339Nano)),
+		Stdin:      conn, Stdout: reader, Reconnected: reconnected,
 		NextRequestID: response.NextRequestID, ACPState: response.ACPState,
 	}, nil
 }

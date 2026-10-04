@@ -13,12 +13,6 @@ import (
 // Every scripted reply below is a SINGLE line. readFrame is newline-delimited, so a
 // pretty-printed reply is read as a truncated frame and the client waits forever.
 
-// threadWithTurns is a thread/read result carrying an ordered turn list.
-const threadWithTurns = `{"thread":{"id":"thread-1","turns":[` +
-	`{"id":"turn-a","status":"completed"},` +
-	`{"id":"turn-b","status":"completed"},` +
-	`{"id":"turn-c","status":"completed"}]}}`
-
 const threadWithRenderedHistory = `{"thread":{"id":"thread-1","turns":[` +
 	`{"id":"turn-a","status":"completed","items":[` +
 	`{"type":"userMessage","id":"user-1","clientId":"client-1","content":[{"type":"text","text":"Inspect the repository"}]},` +
@@ -91,6 +85,47 @@ func TestReadHistoryReconstructsNativeTurnsForTheChatTimeline(t *testing.T) {
 	}
 	if events[4].TurnState != "completed" {
 		t.Errorf("recovered turn state = %q", events[4].TurnState)
+	}
+}
+
+func TestReadHistoryPagesPaginatedCodexTurnsInOrder(t *testing.T) {
+	conv, srv := openConversation(t)
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","historyMode":"paginated","turns":[]}}`)
+	srv.respondSequence("thread/turns/list",
+		`{"data":[{"id":"turn-a","status":"completed","items":[]}],"nextCursor":"page-2"}`,
+		`{"data":[{"id":"turn-b","status":"completed","items":[]}],"nextCursor":null}`)
+
+	events, err := conv.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	if len(events) != 4 || events[0].ProviderTurnID != "turn-a" || events[2].ProviderTurnID != "turn-b" {
+		t.Fatalf("paginated history events = %#v", events)
+	}
+	var pageRequests []struct {
+		Cursor        *string `json:"cursor"`
+		SortDirection string  `json:"sortDirection"`
+		ItemsView     string  `json:"itemsView"`
+	}
+	srv.mu.Lock()
+	for _, frame := range srv.seen {
+		if frame.Method != "thread/turns/list" {
+			continue
+		}
+		var params struct {
+			Cursor        *string `json:"cursor"`
+			SortDirection string  `json:"sortDirection"`
+			ItemsView     string  `json:"itemsView"`
+		}
+		if err := json.Unmarshal(frame.Params, &params); err != nil {
+			srv.mu.Unlock()
+			t.Fatal(err)
+		}
+		pageRequests = append(pageRequests, params)
+	}
+	srv.mu.Unlock()
+	if len(pageRequests) != 2 || pageRequests[0].Cursor != nil || pageRequests[1].Cursor == nil || *pageRequests[1].Cursor != "page-2" || pageRequests[0].SortDirection != "asc" || pageRequests[0].ItemsView != "full" {
+		t.Fatalf("page requests = %#v", pageRequests)
 	}
 }
 
@@ -185,74 +220,52 @@ func TestRefreshHistoryPerformsANewThreadRead(t *testing.T) {
 	}
 }
 
-// The provider takes a COUNT from the end of the thread, not a turn id, so the whole
-// correctness of rollback rests on turning the named turn into the right number.
-// Naming the middle of three turns must discard that turn and the one after it.
-func TestRollbackCountsTurnsFromTheNamedOneToTheEnd(t *testing.T) {
+// Revert excludes the named turn and every later turn from durable history.
+func TestRollbackRevertsBeforeTheNamedTurn(t *testing.T) {
 	conv, srv := openConversation(t)
-	srv.reply("thread/read", threadWithTurns)
-	srv.reply("thread/rollback", `{"thread":{"id":"thread-1","turns":[{"id":"turn-a","status":"completed"}]}}`)
+	srv.reply("thread/revert", `{"thread":{"id":"thread-1","turns":[]}}`)
 
 	if err := conv.Rollback(context.Background(), "turn-b"); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
 
-	read := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/read" })
-	var readParams struct {
-		ThreadID     string `json:"threadId"`
-		IncludeTurns bool   `json:"includeTurns"`
-	}
-	if err := json.Unmarshal(read.Params, &readParams); err != nil {
-		t.Fatalf("thread/read params: %v", err)
-	}
-	if readParams.ThreadID != "thread-1" || !readParams.IncludeTurns {
-		t.Errorf("thread/read params = %+v, want thread-1 with turns", readParams)
-	}
-
-	rollback := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/rollback" })
+	rollback := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/revert" })
 	var params struct {
-		ThreadID string `json:"threadId"`
-		NumTurns int    `json:"numTurns"`
+		ThreadID     string `json:"threadId"`
+		BeforeTurnID string `json:"beforeTurnId"`
 	}
 	if err := json.Unmarshal(rollback.Params, &params); err != nil {
-		t.Fatalf("thread/rollback params: %v", err)
+		t.Fatalf("thread/revert params: %v", err)
 	}
-	if params.ThreadID != "thread-1" {
-		t.Errorf("threadId = %q, want thread-1", params.ThreadID)
-	}
-	if params.NumTurns != 2 {
-		t.Errorf("numTurns = %d, want 2 (the named turn and the one after it)", params.NumTurns)
+	if params.ThreadID != "thread-1" || params.BeforeTurnID != "turn-b" {
+		t.Errorf("params = %+v, want thread-1 before turn-b", params)
 	}
 }
 
-// Naming the last turn is the common case and must ask for exactly one turn: the
-// provider rejects numTurns < 1, and asking for zero would be a silent no-op.
-func TestRollbackOfTheLastTurnDiscardsOne(t *testing.T) {
+func TestRollbackOfTheLastTurnUsesItsID(t *testing.T) {
 	conv, srv := openConversation(t)
-	srv.reply("thread/read", threadWithTurns)
-	srv.reply("thread/rollback", `{"thread":{"id":"thread-1","turns":[]}}`)
+	srv.reply("thread/revert", `{"thread":{"id":"thread-1","turns":[]}}`)
 
 	if err := conv.Rollback(context.Background(), "turn-c"); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
 
-	rollback := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/rollback" })
+	rollback := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/revert" })
 	var params struct {
-		NumTurns int `json:"numTurns"`
+		BeforeTurnID string `json:"beforeTurnId"`
 	}
 	if err := json.Unmarshal(rollback.Params, &params); err != nil {
 		t.Fatalf("params: %v", err)
 	}
-	if params.NumTurns != 1 {
-		t.Errorf("numTurns = %d, want 1", params.NumTurns)
+	if params.BeforeTurnID != "turn-c" {
+		t.Errorf("beforeTurnId = %q, want turn-c", params.BeforeTurnID)
 	}
 }
 
-// A turn the provider does not have must not produce a rollback at all. Guessing a
-// count would discard turns the user never named.
-func TestRollbackRefusesATurnTheProviderDoesNotHave(t *testing.T) {
+// The provider validates ownership and existence of the named turn.
+func TestRollbackPropagatesUnknownTurnRefusal(t *testing.T) {
 	conv, srv := openConversation(t)
-	srv.reply("thread/read", threadWithTurns)
+	srv.replyError("thread/revert", -32600, "turn not found")
 
 	err := conv.Rollback(context.Background(), "turn-zzz")
 	if err == nil {
@@ -261,8 +274,8 @@ func TestRollbackRefusesATurnTheProviderDoesNotHave(t *testing.T) {
 	if !isRefusal(err) {
 		t.Errorf("err = %v, want a provider refusal", err)
 	}
-	if srv.sentMethod("thread/rollback") {
-		t.Fatal("thread/rollback was sent for a turn the provider does not have")
+	if !srv.sentMethod("thread/revert") {
+		t.Fatal("thread/revert was not sent for provider validation")
 	}
 }
 
@@ -271,8 +284,7 @@ func TestRollbackRefusesATurnTheProviderDoesNotHave(t *testing.T) {
 // undo a moment too early.
 func TestRollbackTranslatesTheMidTurnRefusal(t *testing.T) {
 	conv, srv := openConversation(t)
-	srv.reply("thread/read", threadWithTurns)
-	srv.replyError("thread/rollback", -32600, "Cannot rollback while a turn is in progress.")
+	srv.replyError("thread/revert", -32600, "Cannot revert while a turn is in progress.")
 
 	err := conv.Rollback(context.Background(), "turn-c")
 	if err == nil {
@@ -290,11 +302,11 @@ func TestRollbackTranslatesTheMidTurnRefusal(t *testing.T) {
 // stop the agent when the real problem is that the provider is gone.
 func TestRollbackKeepsATransportFailureAsAFailure(t *testing.T) {
 	conv, srv := openConversation(t)
-	srv.replyError("thread/read", -32603, "internal error")
+	srv.replyError("thread/revert", -32603, "internal error")
 
 	err := conv.Rollback(context.Background(), "turn-c")
 	if err == nil {
-		t.Fatal("Rollback succeeded despite thread/read failing")
+		t.Fatal("Rollback succeeded despite thread/revert failing")
 	}
 	if isRefusal(err) {
 		t.Errorf("err = %v, want a plain failure rather than a refusal", err)

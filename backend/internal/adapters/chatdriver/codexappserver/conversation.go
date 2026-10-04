@@ -51,6 +51,7 @@ type conversation struct {
 	threadID        string
 	historyParentID string
 	providerScopeID string
+	protocolCaps    ports.ChatCapabilities
 	readOnly        bool
 	events          chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
@@ -145,7 +146,16 @@ func (c *conversation) PreservesProviderOnClose() bool { return c.proc.terminate
 func (c *conversation) ReconnectedLive() bool { return c.proc.reconnected }
 
 // Capabilities reports what this conversation can do.
-func (c *conversation) Capabilities() ports.ChatCapabilities { return capabilities() }
+func (c *conversation) Capabilities() ports.ChatCapabilities {
+	if c.protocolCaps == nil {
+		return capabilities()
+	}
+	caps := make(ports.ChatCapabilities, len(c.protocolCaps))
+	for k, v := range c.protocolCaps {
+		caps[k] = v
+	}
+	return caps
+}
 
 // Events is the normalized stream. It closes when the conversation ends.
 func (c *conversation) Events() <-chan ports.ChatEvent { return c.events }

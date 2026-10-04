@@ -1,13 +1,12 @@
 package codexappserver
 
 import (
-	"encoding/json"
-	"os"
+	"context"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 )
@@ -47,6 +46,8 @@ var driverMethods = []struct {
 	// Outbound: capabilities the driver advertises.
 	{codexproto.MethodModelList, &codexproto.ModelListParams{}},
 	{codexproto.MethodThreadCompactStart, &codexproto.ThreadCompactStartParams{}},
+	{codexproto.MethodThreadRevert, &codexproto.ThreadRevertParams{}},
+	{codexproto.MethodThreadTurnsList, &codexproto.ThreadTurnsListParams{}},
 	// Takes no params; the generated table records Params: "".
 	{codexproto.MethodAccountRateLimitsRead, nil},
 	{codexproto.MethodSkillsList, &codexproto.SkillsListParams{}},
@@ -160,8 +161,8 @@ func TestApprovalKindsAreExhaustive(t *testing.T) {
 	}
 }
 
-// The generated file must describe the provider on this machine. A stale
-// checkout is how a driver starts sending methods that no longer exist.
+// The installed provider must retain the required AO contract. Unused or
+// optional methods may come and go without requiring regenerated bindings.
 //
 // Skipped rather than failed when the provider is absent, so the suite still runs
 // on a machine without codex installed; the live e2e covers the other direction.
@@ -172,12 +173,21 @@ func TestGeneratedProtocolMatchesTheInstalledProvider(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	out, err := exec.Command(bin, "app-server", "generate-json-schema", "--out", dir).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "app-server", "generate-json-schema", "--out", dir).CombinedOutput()
 	if err != nil {
-		t.Skipf("provider declined to emit its schema (%v): %s", err, out)
+		t.Fatalf("installed provider cannot export its protocol schema (%v): %s", err, out)
 	}
 
-	live := methodsFromSchema(t, dir)
+	directions := methodDirectionsFromSchema(t, dir)
+	if _, err := profileFromMethods(directions); err != nil {
+		t.Fatalf("installed Codex core protocol: %v", err)
+	}
+	live := map[string]bool{}
+	for name := range directions {
+		live[name] = true
+	}
 	generated := map[string]bool{}
 	for _, m := range codexproto.Methods {
 		generated[m.Name] = true
@@ -203,60 +213,25 @@ func TestGeneratedProtocolMatchesTheInstalledProvider(t *testing.T) {
 			"run `go generate ./internal/adapters/chatdriver/codexappserver/...` to pick them up: %v",
 			len(missing), truncate(missing))
 	}
-	// A method AO's generated file has and the provider does not is the dangerous
-	// direction: any call to it fails at runtime.
+	// The runtime checks required methods and gates optional capabilities.
+	// Removed methods elsewhere in the baseline do not invalidate that contract.
 	if len(extra) > 0 {
-		t.Errorf("generated protocol declares %d method(s) the installed provider does not: %v",
+		t.Logf("compiled baseline declares %d removed method(s); optional capabilities are disabled at runtime: %v",
 			len(extra), truncate(extra))
 	}
 }
 
-func methodsFromSchema(t *testing.T, dir string) map[string]bool {
-	t.Helper()
-	found := map[string]bool{}
-	for name := range methodDirectionsFromSchema(t, dir) {
-		found[name] = true
-	}
-	return found
-}
-
-// methodDirectionsFromSchema maps each method the installed provider declares onto
-// the direction that declares it. Direction is what says whether a client can
-// initiate something or only observe it.
+// Parse the same method directions the production runtime uses.
 func methodDirectionsFromSchema(t *testing.T, dir string) map[string]string {
 	t.Helper()
-	found := map[string]string{}
-	for _, file := range []string{
-		"ClientRequest.json", "ClientNotification.json",
-		"ServerRequest.json", "ServerNotification.json",
-	} {
-		raw, err := os.ReadFile(filepath.Join(dir, file))
-		if err != nil {
-			continue
-		}
-		var doc struct {
-			OneOf []struct {
-				Properties struct {
-					Method struct {
-						Enum []string `json:"enum"`
-					} `json:"method"`
-				} `json:"properties"`
-			} `json:"oneOf"`
-		}
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			t.Fatalf("parse %s: %v", file, err)
-		}
-		direction := strings.TrimSuffix(file, ".json")
-		for _, arm := range doc.OneOf {
-			for _, name := range arm.Properties.Method.Enum {
-				found[name] = direction
-			}
-		}
+	methods, err := readProtocolMethods(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(found) == 0 {
-		t.Fatalf("no methods parsed out of %s", dir)
+	if len(methods) == 0 {
+		t.Fatal("installed provider schema declares no methods")
 	}
-	return found
+	return methods
 }
 
 func truncate(names []string) []string {
@@ -267,34 +242,19 @@ func truncate(names []string) []string {
 	return append(names[:limit:limit], "…")
 }
 
-// Voice is deferred, and this is what makes deferring safe rather than forgetful.
-//
-// The provider declares eight `thread/realtime/*` methods — audio deltas, SDP,
-// live transcript — but every one is a ServerNotification. There is NO
-// ClientRequest that starts a realtime session, so no client can reach any of
-// them, and the supporting types (ThreadRealtimeStartTransport,
-// RealtimeOutputModality, RealtimeVoicesList, ThreadRealtimeInitialItem) are
-// referenced by nothing at all. The feature is half-landed upstream with its door
-// not yet published.
-//
-// So AO handling none of it costs nothing today: there is no reachable behaviour
-// to be missing. What WOULD cost something is discovering the entry point exists
-// months after it shipped, which is what happens when "check again later" lives in
-// someone's memory instead of in the suite.
-//
-// When this test fails, voice became buildable. The failure is the feature
-// request: wire the start request, then the eight notifications (their generated
-// types already exist), then the product work — capture, playback, transport, and
-// a transcript surface.
-func TestRealtimeStaysUnreachableUntilTheProviderPublishesAnEntryPoint(t *testing.T) {
+// New realtime entry points do not invalidate a client that does not offer voice.
+// Report their presence for maintainers without blocking an unrelated CLI update.
+func TestRealtimeFeaturesRemainOptional(t *testing.T) {
 	bin, err := exec.LookPath("codex")
 	if err != nil {
 		t.Skip("codex not installed; nothing to check the realtime surface against")
 	}
 
 	dir := t.TempDir()
-	if out, err := exec.Command(bin, "app-server", "generate-json-schema", "--out", dir).CombinedOutput(); err != nil {
-		t.Skipf("provider declined to emit its schema (%v): %s", err, out)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, bin, "app-server", "generate-json-schema", "--out", dir).CombinedOutput(); err != nil {
+		t.Fatalf("installed provider cannot export its protocol schema (%v): %s", err, out)
 	}
 
 	var startable []string
@@ -311,9 +271,7 @@ func TestRealtimeStaysUnreachableUntilTheProviderPublishesAnEntryPoint(t *testin
 	sort.Strings(startable)
 
 	if len(startable) > 0 {
-		t.Errorf("the provider now lets a client start a realtime session: %v\n"+
-			"Voice is buildable — see this test's comment for what that entails. "+
-			"Regenerate the protocol and decide whether to take it on; if not, "+
-			"record the decision here so this stops reporting it.", startable)
+		t.Logf("the provider now lets a client start a realtime session: %v\n"+
+			"Voice remains outside AO's supported feature set; this does not break existing conversations.", startable)
 	}
 }

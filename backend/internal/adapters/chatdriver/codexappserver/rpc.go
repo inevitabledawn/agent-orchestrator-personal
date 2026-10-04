@@ -21,6 +21,8 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // frame is the union of every shape that crosses the wire.
@@ -74,8 +76,10 @@ var ErrConnClosed = errors.New("app-server connection closed")
 // knows nothing about threads or turns, so it can be tested over an in-memory
 // pipe with no child process.
 type conn struct {
-	w   io.WriteCloser
-	log *slog.Logger
+	// Immutable after setup, before the first request. Nil for unprofiled transports.
+	protocolMethods map[string]string
+	w               io.WriteCloser
+	log             *slog.Logger
 
 	nextID atomic.Int64
 
@@ -328,6 +332,9 @@ func (c *conn) write(v any) error {
 // request sends a client->server request and waits for its response. The caller's
 // context bounds the wait; a late response is discarded by deliver.
 func (c *conn) request(ctx context.Context, method string, params, out any) error {
+	if c.protocolMethods != nil && c.protocolMethods[method] != "ClientRequest" {
+		return fmt.Errorf("%w: installed Codex does not support %s", ports.ErrChatUnsupported, method)
+	}
 	id := c.nextID.Add(1)
 	ch := make(chan frame, 1)
 

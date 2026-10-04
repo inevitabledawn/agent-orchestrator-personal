@@ -14,32 +14,20 @@ import (
 
 // Conversation history operations: rollback, fork, and the thread title.
 //
-// Each wire shape below was measured against a live `codex app-server` 0.146.0
-// rather than read off the generated schema, because two of them do not do what
-// their names suggest:
+// Fork and rename were measured against a live `codex app-server` 0.146.0.
+// Revert follows the provider's 0.158.0 schema:
 //
-//   - thread/rollback takes {threadId, numTurns} and drops numTurns turns from the
-//     END of the thread. It takes no turn id at all, which is why rolling back to a
-//     turn the user pointed at has to read the thread's own turn list and count
-//     backwards from it.
+//   - thread/revert takes {threadId, beforeTurnId} and removes the named turn
+//     and every later turn from durable history. It does not undo local files.
 //   - thread/fork takes {threadId, lastTurnId?} and answers with a NEW thread id.
 //     Omitting cwd makes the fork inherit the source thread's working directory,
 //     which is the only directory whose files match the history being copied.
 //
-// The provider's refusals are as load-bearing as its successes, so they are
-// recorded here too. All three arrive as code -32600:
+// The 0.146.0 provider's refusals were recorded with code -32600:
 //
-//	rollback mid-turn      "Cannot rollback while a turn is in progress."
-//	rollback numTurns < 1  "numTurns must be >= 1"
 //	fork through live turn "lastTurnId '...' identifies an in-progress turn"
 //	blank title            "thread name must not be empty"
 //	unloaded thread        "thread not found: <id>"
-//
-// thread/rollback is annotated DEPRECATED in the protocol schema, and the
-// provider's own `undo` experimental feature already reports stage "removed". It
-// works on 0.146.0. When it goes, the replacement is thread/fork with lastTurnId,
-// which yields a different thread id — something ChatRollbacker cannot report, so
-// that day needs a port change and not a swap of the call in here.
 
 // Asserted so a refactor cannot silently drop one of these: the service
 // feature-detects each interface, and a missing method would read as "the provider
@@ -94,12 +82,6 @@ func asRefusal(err error) error {
 	return err
 }
 
-// providerTurn is the subset of a thread's turn list AO reads.
-type providerTurn struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-}
-
 // ReadHistory returns a settled, provider-neutral replay of the native Codex
 // thread. It is how a TUI -> Chat handoff makes the work already visible in the
 // terminal visible in AO's structured timeline as well; resuming the thread alone
@@ -119,7 +101,15 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 	c.mu.Lock()
 	c.historyParentID = deref(resp.Thread.ForkedFromID)
 	c.mu.Unlock()
-	for _, turn := range resp.Thread.Turns {
+	turns := resp.Thread.Turns
+	if resp.Thread.HistoryMode != nil && *resp.Thread.HistoryMode == codexproto.ThreadHistoryModePaginated {
+		paginatedTurns, err := c.readPaginatedTurns(ctx)
+		if err != nil {
+			return nil, err
+		}
+		turns = paginatedTurns
+	}
+	for _, turn := range turns {
 		state := turnStateFrom(string(turn.Status))
 		if state == domain.TurnStateRunning || state == domain.TurnStateQueued {
 			return nil, fmt.Errorf("%w: Codex turn %s is %s",
@@ -127,8 +117,8 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 		}
 	}
 
-	events := make([]ports.ChatEvent, 0, len(resp.Thread.Turns)*4)
-	for _, turn := range resp.Thread.Turns {
+	events := make([]ports.ChatEvent, 0, len(turns)*4)
+	for _, turn := range turns {
 		state := turnStateFrom(string(turn.Status))
 
 		events = append(events, ports.ChatEvent{
@@ -201,6 +191,31 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 		events[i] = c.scopedEvent(events[i])
 	}
 	return events, nil
+}
+
+func (c *conversation) readPaginatedTurns(ctx context.Context) ([]codexproto.Turn, error) {
+	var turns []codexproto.Turn
+	var cursor *string
+	seen := map[string]bool{}
+	sortDirection := codexproto.SortDirectionAsc
+	itemsView := codexproto.TurnItemsViewFull
+	for {
+		var page codexproto.ThreadTurnsListResponse
+		if err := c.conn.request(ctx, codexproto.MethodThreadTurnsList, codexproto.ThreadTurnsListParams{
+			ThreadID: c.threadID, Cursor: cursor, SortDirection: &sortDirection, ItemsView: &itemsView,
+		}, &page); err != nil {
+			return nil, asRefusal(fmt.Errorf("thread/turns/list history: %w", err))
+		}
+		turns = append(turns, page.Data...)
+		if page.NextCursor == nil || *page.NextCursor == "" {
+			return turns, nil
+		}
+		if seen[*page.NextCursor] {
+			return nil, errors.New("thread/turns/list repeated a pagination cursor")
+		}
+		seen[*page.NextCursor] = true
+		cursor = page.NextCursor
+	}
 }
 
 // RefreshHistory performs another authoritative thread/read. Codex exposes a
@@ -304,59 +319,18 @@ func (c *conversation) Rollback(ctx context.Context, providerTurnID string) erro
 		return errors.New("rollback needs a provider turn id")
 	}
 
-	// Serialized with turn dispatch: the count computed below is only valid for the
-	// turn list it was read from, and a turn starting in between would shift every
-	// position in it.
+	// Serialize with turn dispatch so no new turn starts while the provider
+	// replaces this thread's history.
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
-	turns, err := c.readTurns(ctx)
-	if err != nil {
-		return err
-	}
-
-	discard := 0
-	for i, turn := range turns {
-		if turn.ID == providerTurnID {
-			discard = len(turns) - i
-			break
-		}
-	}
-	if discard == 0 {
-		// Either the turn was already discarded or it belongs to history this thread
-		// no longer holds. Refusing beats guessing: any count AO invented here would
-		// discard turns the user never named.
-		return refuse("turn %q is not in the provider's history", providerTurnID)
-	}
-
-	if err := c.conn.request(ctx, "thread/rollback", map[string]any{
-		"threadId": c.threadID,
-		"numTurns": discard,
+	if err := c.conn.request(ctx, codexproto.MethodThreadRevert, codexproto.ThreadRevertParams{
+		ThreadID:     c.threadID,
+		BeforeTurnID: providerTurnID,
 	}, nil); err != nil {
-		return asRefusal(fmt.Errorf("thread/rollback: %w", err))
+		return asRefusal(fmt.Errorf("thread/revert: %w", err))
 	}
 	return nil
-}
-
-// readTurns is the provider's own turn list for this thread, oldest first.
-//
-// Read from the provider rather than counted from AO's rows because the two sets
-// legitimately differ: AO records a turn whose dispatch the provider rejected, and
-// a turn from before a resume may be absent here. thread/rollback counts in the
-// provider's terms, so counting in AO's would discard the wrong number of turns.
-func (c *conversation) readTurns(ctx context.Context) ([]providerTurn, error) {
-	var resp struct {
-		Thread struct {
-			Turns []providerTurn `json:"turns"`
-		} `json:"thread"`
-	}
-	if err := c.conn.request(ctx, "thread/read", map[string]any{
-		"threadId":     c.threadID,
-		"includeTurns": true,
-	}, &resp); err != nil {
-		return nil, asRefusal(fmt.Errorf("thread/read: %w", err))
-	}
-	return resp.Thread.Turns, nil
 }
 
 // Fork branches this conversation into a second provider conversation, so an

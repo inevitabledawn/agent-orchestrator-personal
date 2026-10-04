@@ -34,9 +34,13 @@ func TestLiveCodexAppServer(t *testing.T) {
 	}
 
 	workspace := t.TempDir()
+	dataDir := t.TempDir()
 	seedGitWorkspace(t, workspace)
 
 	d := New(livePlugin{bin: bin}, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	// The go test binary cannot serve AO's chat-host subcommand. Exercise the
+	// app-server wire directly; persistent-host ownership has separate tests.
+	d.persistent = false
 
 	caps, err := d.Probe(context.Background())
 	if err != nil {
@@ -51,6 +55,7 @@ func TestLiveCodexAppServer(t *testing.T) {
 
 	conv, err := d.Start(ctx, ports.ChatStartConfig{
 		SessionID:     "ao-live",
+		DataDir:       dataDir,
 		WorkspacePath: workspace,
 		Env:           envMap(),
 		Permissions:   ports.PermissionModeDefault,
@@ -122,6 +127,7 @@ collect:
 
 	resumed, err := d.Resume(ctx, ports.ChatResumeConfig{
 		SessionID:              "ao-live",
+		DataDir:                dataDir,
 		ProviderConversationID: threadID,
 		WorkspacePath:          workspace,
 		Env:                    envMap(),
@@ -136,6 +142,31 @@ collect:
 		t.Fatalf("resumed thread = %q, want %q", got, threadID)
 	}
 	t.Logf("resumed thread %s on a fresh app-server process", threadID)
+
+	history, err := resumed.(ports.ChatHistoryReader).ReadHistory(ctx)
+	if err != nil {
+		t.Fatalf("ReadHistory after resume: %v", err)
+	}
+	var firstTurnID string
+	for _, event := range history {
+		if event.Kind == ports.ChatEventTurnStarted {
+			firstTurnID = event.ProviderTurnID
+			break
+		}
+	}
+	if firstTurnID == "" {
+		t.Fatalf("resumed history has no turn: %#v", history)
+	}
+	if err := resumed.(ports.ChatRollbacker).Rollback(ctx, firstTurnID); err != nil {
+		t.Fatalf("Rollback after resume: %v", err)
+	}
+	remaining, err := resumed.(ports.ChatHistoryReader).ReadHistory(ctx)
+	if err != nil {
+		t.Fatalf("ReadHistory after revert: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("reverted thread still has %d history events", len(remaining))
+	}
 }
 
 // livePlugin stands in for AO's Codex agent plugin so this test exercises the
@@ -175,5 +206,29 @@ func seedGitWorkspace(t *testing.T, dir string) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
+	}
+}
+
+// Explicitly opt in: this initializes app-server and lists models, without a
+// conversation or prompt. It is separate from the paid live-turn smoke test.
+func TestInstalledCodexCompatibilityProbe(t *testing.T) {
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	if os.Getenv("AO_AGENT_CLI_COMPAT") != "1" {
+		t.Skip("set AO_AGENT_CLI_COMPAT=1 for installed CLI checks")
+	}
+	bin, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal("codex is required for this compatibility check")
+	}
+	d := New(livePlugin{bin: bin}, nil)
+	d.persistent = false
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	caps, err := d.Probe(ctx)
+	if err != nil {
+		t.Fatalf("installed Codex handshake/model inventory: %v", err)
+	}
+	if missing := ports.MissingProductionCapabilities(caps); len(missing) != 0 {
+		t.Fatalf("missing capabilities: %v", missing)
 	}
 }

@@ -70,6 +70,18 @@ type threadItem struct {
 	Message string `json:"message"`
 }
 
+// Only project the lifecycle fields AO consumes. Decoding the entire generated
+// Turn would let a change to unused history/items metadata break completion.
+// Field names and the error payload still follow the generated notification types.
+type turnLifecycleEnvelope struct {
+	ThreadID string `json:"threadId"`
+	Turn     struct {
+		ID     string                `json:"id"`
+		Status codexproto.TurnStatus `json:"status"`
+		Error  *codexproto.TurnError `json:"error"`
+	} `json:"turn"`
+}
+
 // itemID reports the provider's item id, which the generated schema makes optional.
 func (it threadItem) itemID() string { return deref(it.ID) }
 
@@ -132,9 +144,10 @@ type resolvedEnvelope struct {
 func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 	switch n.Method {
 	case codexproto.MethodTurnStarted:
-		var p codexproto.TurnStartedNotification
-		if err := json.Unmarshal(n.Params, &p); err != nil {
-			return nil
+		var p turnLifecycleEnvelope
+		if err := json.Unmarshal(n.Params, &p); err != nil ||
+			firstNonEmpty(p.Turn.ID, turnIDFallback(n.Params)) == "" || p.Turn.Status == "" {
+			return []ports.ChatEvent{{Kind: ports.ChatEventError, Err: fmt.Errorf("%w: invalid %s lifecycle payload", ports.ErrChatDriverIncompatible, n.Method)}}
 		}
 		return []ports.ChatEvent{{
 			Kind:                   ports.ChatEventTurnStarted,
@@ -143,9 +156,10 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 		}}
 
 	case codexproto.MethodTurnCompleted:
-		var p codexproto.TurnCompletedNotification
-		if err := json.Unmarshal(n.Params, &p); err != nil {
-			return nil
+		var p turnLifecycleEnvelope
+		if err := json.Unmarshal(n.Params, &p); err != nil ||
+			firstNonEmpty(p.Turn.ID, turnIDFallback(n.Params)) == "" || p.Turn.Status == "" {
+			return []ports.ChatEvent{{Kind: ports.ChatEventError, Err: fmt.Errorf("%w: invalid %s lifecycle payload", ports.ErrChatDriverIncompatible, n.Method)}}
 		}
 		ev := ports.ChatEvent{
 			Kind:                   ports.ChatEventTurnCompleted,
@@ -875,7 +889,7 @@ func autoReviewDetail(
 		detail["rawCommand"] = *action.Command
 	}
 	if action.Cwd != nil && *action.Cwd != "" {
-		detail["cwd"] = string(*action.Cwd)
+		detail["cwd"] = *action.Cwd
 	}
 	if action.Source != nil {
 		detail["commandSource"] = string(*action.Source)

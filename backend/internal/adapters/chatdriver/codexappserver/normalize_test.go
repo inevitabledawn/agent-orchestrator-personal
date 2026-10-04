@@ -407,10 +407,10 @@ func TestNormalizeRateLimitsKeepsReportedZero(t *testing.T) {
 	}
 }
 
-// Malformed params must be skipped, never panic.
+// Malformed optional params are skipped; lifecycle corruption is surfaced.
 func TestNormalizeToleratesMalformedParams(t *testing.T) {
 	for _, method := range []string{
-		"turn/started", "turn/completed", "item/started", "item/completed",
+		"item/started", "item/completed",
 		"item/agentMessage/delta", "thread/tokenUsage/updated", "serverRequest/resolved",
 		"account/rateLimits/updated",
 	} {
