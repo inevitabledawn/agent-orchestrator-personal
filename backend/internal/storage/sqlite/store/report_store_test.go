@@ -85,6 +85,54 @@ func TestReportStoreRejectsInvalidRecord(t *testing.T) {
 	}
 }
 
+func TestParallelOrchestratorOwnershipPersistsAndScopesReportClaims(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "ao")
+	orchA := sampleRecord("ao")
+	orchA.Kind = domain.KindOrchestrator
+	orchA.ParallelOrchestrator = true
+	orchA, err := s.CreateSession(ctx, orchA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orchB := sampleRecord("ao")
+	orchB.Kind = domain.KindOrchestrator
+	orchB.ParallelOrchestrator = true
+	orchB, err = s.CreateSession(ctx, orchB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range []domain.SessionID{orchA.ID, orchB.ID} {
+		worker := sampleRecord("ao")
+		worker.OrchestratorSessionID = owner
+		worker, err = s.CreateSession(ctx, worker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, found, err := s.GetSession(ctx, worker.ID)
+		if err != nil || !found || got.OrchestratorSessionID != owner {
+			t.Fatalf("worker owner after read = %#v, %v", got, err)
+		}
+		now := time.Now().UTC().Truncate(time.Second)
+		if _, err := s.CreateReport(ctx, domain.ReportRecord{
+			ID: "report-" + string(owner), SessionID: worker.ID, ProjectID: "ao", OrchestratorSessionID: owner,
+			Message: "from " + string(owner), CreatedAt: now, AvailableAt: now,
+			DeliveryState: domain.ReportPending, RepeatCount: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed, err := s.ClaimPendingReportBatchForOwner(ctx, "ao", orchA.ID, "a-token", time.Now().UTC())
+	if err != nil || len(claimed) != 1 || claimed[0].OrchestratorSessionID != orchA.ID {
+		t.Fatalf("A claim = %#v, %v", claimed, err)
+	}
+	claimed, err = s.ClaimPendingReportBatchForOwner(ctx, "ao", orchB.ID, "b-token", time.Now().UTC())
+	if err != nil || len(claimed) != 1 || claimed[0].OrchestratorSessionID != orchB.ID {
+		t.Fatalf("B claim = %#v, %v", claimed, err)
+	}
+}
+
 func TestReportStoreClaimAcknowledgeAndTokenFence(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

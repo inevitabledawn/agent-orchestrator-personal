@@ -497,8 +497,8 @@ describe("project board with no sessions", () => {
 		await userEvent.click(spawnButton);
 		await userEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
 
-		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(1, "proj-1", "board", false, undefined);
-		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(2, "proj-1", "board", false, "tui");
+		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(1, "proj-1", "board", false, undefined, undefined, true);
+		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(2, "proj-1", "board", false, "tui", undefined, true);
 	});
 
 	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
@@ -656,7 +656,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		renderBoard(board());
 		const empty = await screen.findByTestId("project-board-empty");
 		const headerTask = screen.getAllByRole("button", { name: "New task" }).find((button) => !empty.contains(button))!;
-		const headerOrchestrator = screen.getAllByRole("button", { name: "Spawn Orchestrator" }).find((button) => !empty.contains(button))!;
+		const headerOrchestrator = screen.getByRole("button", { name: "Open orchestrator" });
 		expect(headerTask).toHaveClass("topbar-control--secondary", "topbar-control--labeled");
 		expect(headerOrchestrator).toHaveClass("topbar-control--secondary", "topbar-control--labeled");
 		expect(headerTask).toHaveAttribute("data-priority", "primary");
@@ -678,7 +678,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 			updateWorkers([session]);
 			await waitFor(() => expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument());
 			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
-			expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
+			expect(screen.getByRole("button", { name: "Open orchestrator" })).toHaveClass("topbar-control--primary");
 		}
 		updateWorkers([]);
 		await screen.findByTestId("project-board-empty");
@@ -692,9 +692,9 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		spawnOrchestratorMock.mockResolvedValueOnce("orch-retry");
 		renderBoard(board());
 		await screen.findByTestId("project-board-empty");
-		const buttons = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
-		expect(buttons).toHaveLength(2);
-		act(() => { buttons[0].click(); buttons[1].click(); });
+		const buttons = [screen.getByRole("button", { name: "Open orchestrator" }), screen.getByRole("button", { name: "Spawn Orchestrator" })];
+		const createButton = within(screen.getByTestId("project-board-empty")).getByRole("button", { name: "Spawn Orchestrator" });
+		act(() => { createButton.click(); createButton.click(); });
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
 		for (const button of buttons) {
 			expect(button).toBeDisabled();
@@ -705,7 +705,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		for (const button of buttons) expect(button).toBeEnabled();
 		await userEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(2));
-		expect(spawnOrchestratorMock).toHaveBeenLastCalledWith("proj-1", "board", false, "tui");
+		expect(spawnOrchestratorMock).toHaveBeenLastCalledWith("proj-1", "board", false, "tui", undefined, true);
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "orch-retry" },
 		}));
@@ -720,7 +720,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		}));
 		const view = renderBoard(board());
 		await screen.findByTestId("project-board-empty");
-		await userEvent.click(screen.getAllByRole("button", { name: "Spawn Orchestrator" })[0]);
+		await userEvent.click(within(screen.getByTestId("project-board-empty")).getByRole("button", { name: "Spawn Orchestrator" }));
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
 		view.rerender(<QueryClientProvider client={lastQueryClient!}><ShellProvider value={lastShell!}>{board("proj-2")}</ShellProvider></QueryClientProvider>);
 		await waitFor(() => {
@@ -740,6 +740,6 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		if (state === "missing") await waitFor(() => expect(lastQueryClient!.getQueryState(workspaceQueryKey)?.status).toBe("success"));
 		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
-		expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
+		expect(screen.getByRole("button", { name: "Open orchestrator" })).toHaveClass("topbar-control--primary");
 	});
 });

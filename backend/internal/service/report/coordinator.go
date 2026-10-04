@@ -27,7 +27,7 @@ type DeliveryStore interface {
 	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error)
-	ClaimPendingReportBatch(context.Context, domain.ProjectID, string, time.Time) ([]domain.ReportRecord, error)
+	ClaimPendingReportBatchForOwner(context.Context, domain.ProjectID, domain.SessionID, string, time.Time) ([]domain.ReportRecord, error)
 	AcknowledgeReportBatch(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	DeferReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
@@ -126,7 +126,7 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for {
-		pending, err := c.store.ListPendingReportSchedule(ctx, 1)
+		pending, err := c.store.ListPendingReportSchedule(ctx, int64(^uint64(0)>>1))
 		if err != nil {
 			return c.retryDelay, err
 		}
@@ -134,24 +134,38 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 			return -1, nil
 		}
 		now := c.now().UTC()
-		if pending[0].AvailableAt.After(now) {
-			return pending[0].AvailableAt.Sub(now), nil
+		blocked := false
+		delivered := false
+		for _, head := range pending {
+			if head.AvailableAt.After(now) {
+				break
+			}
+			target, ok, err := c.targetForReport(ctx, head)
+			if err != nil {
+				return c.retryDelay, err
+			}
+			if !ok {
+				blocked = true
+				continue
+			}
+			if err := c.deliverProject(ctx, head.ProjectID, head.OrchestratorSessionID, target); err != nil {
+				return c.retryDelay, err
+			}
+			delivered = true
+			break
 		}
-		if err := c.deliverProject(ctx, pending[0].ProjectID); err != nil {
-			return c.retryDelay, err
+		if delivered {
+			continue
 		}
+		if blocked {
+			return c.retryDelay, fmt.Errorf("report owner unavailable")
+		}
+		return pending[0].AvailableAt.Sub(now), nil
 	}
 }
 
-func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID) error {
-	target, ok, err := c.activeOrchestrator(ctx, projectID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("project %s has no active orchestrator", projectID)
-	}
-	batch, err := c.claim(ctx, projectID)
+func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID, ownerID domain.SessionID, target domain.SessionRecord) error {
+	batch, err := c.claim(ctx, projectID, ownerID)
 	if err != nil || len(batch.Reports) == 0 {
 		return err
 	}
@@ -184,6 +198,20 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	return err
 }
 
+func (c *Coordinator) targetForReport(ctx context.Context, report domain.ReportRecord) (domain.SessionRecord, bool, error) {
+	if report.OrchestratorSessionID == "" {
+		return c.activeOrchestrator(ctx, report.ProjectID)
+	}
+	rec, ok, err := c.store.GetSession(ctx, report.OrchestratorSessionID)
+	if err != nil || !ok {
+		return domain.SessionRecord{}, false, err
+	}
+	if rec.Kind != domain.KindOrchestrator || rec.ProjectID != report.ProjectID || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		return domain.SessionRecord{}, false, nil
+	}
+	return rec, true, nil
+}
+
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {
 	recs, err := c.store.ListSessions(ctx, projectID)
 	if err != nil {
@@ -191,7 +219,7 @@ func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.P
 	}
 	var selected domain.SessionRecord
 	for _, rec := range recs {
-		if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		if rec.Kind != domain.KindOrchestrator || rec.ParallelOrchestrator || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
 			continue
 		}
 		if selected.ID == "" || rec.CreatedAt.After(selected.CreatedAt) {
@@ -209,9 +237,9 @@ type PreparedBatch struct {
 	Reports   []domain.ReportRecord
 }
 
-func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (PreparedBatch, error) {
+func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID, ownerID domain.SessionID) (PreparedBatch, error) {
 	token := c.newToken()
-	reports, err := c.store.ClaimPendingReportBatch(ctx, projectID, token, c.now().UTC())
+	reports, err := c.store.ClaimPendingReportBatchForOwner(ctx, projectID, ownerID, token, c.now().UTC())
 	batchID := ""
 	if len(reports) > 0 {
 		batchID = reports[0].DeliveryBatchID
@@ -232,7 +260,10 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 		return PreparedBatch{}, nil
 	}
-	return c.claim(ctx, rec.ProjectID)
+	if rec.ParallelOrchestrator {
+		return c.claim(ctx, rec.ProjectID, rec.ID)
+	}
+	return c.claim(ctx, rec.ProjectID, "")
 }
 
 // AcceptPiggyback acknowledges reports after the combined user turn is accepted.

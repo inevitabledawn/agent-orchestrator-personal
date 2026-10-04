@@ -39,7 +39,7 @@ func (m *Manager) prepareLiveChatProviderHandoff(ctx context.Context, rec domain
 		return nil, errors.New("native handoff requires conversation ownership storage")
 	}
 	conversation, err := store.ConversationForSession(ctx, rec.ID)
-	if errors.Is(err, domain.ErrNoConversation) && rec.Kind == domain.KindOrchestrator {
+	if errors.Is(err, domain.ErrNoConversation) && rec.Kind == domain.KindOrchestrator && !rec.ParallelOrchestrator {
 		if projects, ok := m.store.(interface {
 			ProjectConversation(context.Context, domain.ProjectID) (domain.ConversationRecord, error)
 		}); ok {
@@ -49,7 +49,7 @@ func (m *Manager) prepareLiveChatProviderHandoff(ctx context.Context, rec domain
 			}
 		}
 	}
-	if errors.Is(err, domain.ErrNoConversation) && rec.Kind != domain.KindOrchestrator {
+	if errors.Is(err, domain.ErrNoConversation) && (rec.Kind != domain.KindOrchestrator || rec.ParallelOrchestrator) {
 		return nil, nil // first Chat use for a worker
 	}
 	if err != nil {

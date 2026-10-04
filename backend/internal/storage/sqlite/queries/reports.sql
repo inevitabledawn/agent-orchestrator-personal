@@ -1,9 +1,33 @@
 -- name: CreateReport :one
 INSERT INTO reports (
     id, session_id, project_id, state, note, message, created_at, available_at,
-    settlement_deadline, repeat_count
+    settlement_deadline, repeat_count, orchestrator_session_id
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING *;
+
+-- name: ListPendingReportsByOwnerSchedule :many
+SELECT * FROM reports
+WHERE project_id = ?
+  AND orchestrator_session_id = ?
+  AND delivery_state = 'pending'
+ORDER BY available_at, created_at, id
+LIMIT ?;
+
+-- name: AssignPendingReportsToOwnerBatch :exec
+UPDATE reports SET delivery_batch_id = ?
+WHERE project_id = ?
+  AND orchestrator_session_id = ?
+  AND delivery_state = 'pending' AND delivery_batch_id = '';
+
+-- name: ClaimPendingReportsByOwnerBatch :many
+UPDATE reports
+SET delivery_state = 'claimed', claim_token = ?,
+    claimed_at = ?, delivery_attempts = delivery_attempts + 1,
+    last_error = ''
+WHERE project_id = ?
+  AND orchestrator_session_id = ?
+  AND delivery_state = 'pending' AND delivery_batch_id = ?
 RETURNING *;
 
 -- name: CreateReportOutput :exec
@@ -29,8 +53,15 @@ ORDER BY r.created_at, r.id, o.position;
 SELECT * FROM reports WHERE project_id = ? ORDER BY created_at, id;
 
 -- name: ListPendingReportSchedule :many
-SELECT * FROM reports
-WHERE delivery_state = 'pending'
+SELECT * FROM reports AS r
+WHERE r.delivery_state = 'pending'
+  AND r.id = (
+    SELECT first.id FROM reports AS first
+    WHERE first.project_id = r.project_id
+      AND first.orchestrator_session_id = r.orchestrator_session_id
+      AND first.delivery_state = 'pending'
+    ORDER BY first.available_at, first.created_at, first.id LIMIT 1
+  )
 ORDER BY available_at, created_at, id
 LIMIT ?;
 

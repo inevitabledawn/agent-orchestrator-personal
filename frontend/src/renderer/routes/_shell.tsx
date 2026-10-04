@@ -863,12 +863,12 @@ function ShellLayout() {
 		() =>
 			aoBridge.app.onNewSessionShortcut(() => {
 				if (scopedProjectId) {
-					requestNewTask(scopedProjectId);
+					requestNewTask(scopedProjectId, scopedSession?.kind === "orchestrator" ? scopedSession.id : undefined);
 				} else {
 					requestNewTask(STANDALONE_WORKSPACE_ID);
 				}
 			}),
-		[scopedProjectId, requestNewTask],
+		[scopedProjectId, scopedSession?.id, scopedSession?.kind, requestNewTask],
 	);
 
 	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen(true)), []);

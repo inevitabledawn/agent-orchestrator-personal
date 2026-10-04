@@ -145,7 +145,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed, orchestrator_session_id, parallel_orchestrator
 FROM sessions WHERE id = ?
 `
 
@@ -209,6 +209,8 @@ type GetSessionRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -274,6 +276,8 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.OrchestratorSessionID,
+		&i.ParallelOrchestrator,
 	)
 	return i, err
 }
@@ -291,7 +295,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed, orchestrator_session_id, parallel_orchestrator
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -355,6 +359,8 @@ type GetSessionByAutomationRunIDRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -420,6 +426,8 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.OrchestratorSessionID,
+		&i.ParallelOrchestrator,
 	)
 	return i, err
 }
@@ -437,9 +445,9 @@ INSERT INTO sessions (
     preview_url, preview_revision, terminate_on_pr_merge, cleanup_generation, browser_capability_verifier,
     session_mode, provider_conversation_id, controller_generation, model, effort, session_permissions,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed, orchestrator_session_id, parallel_orchestrator
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 `
 
@@ -502,6 +510,8 @@ type InsertSessionParams struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
@@ -564,6 +574,8 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.IsTaskPreparation,
 		arg.AutomationRunID,
 		arg.AutomationLaunchCompleted,
+		arg.OrchestratorSessionID,
+		arg.ParallelOrchestrator,
 	)
 	return err
 }
@@ -581,7 +593,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed, orchestrator_session_id, parallel_orchestrator
 FROM sessions ORDER BY project_id, num
 `
 
@@ -645,6 +657,8 @@ type ListAllSessionsRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -716,6 +730,8 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.OrchestratorSessionID,
+			&i.ParallelOrchestrator,
 		); err != nil {
 			return nil, err
 		}
@@ -743,7 +759,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed, orchestrator_session_id, parallel_orchestrator
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -807,6 +823,8 @@ type ListSessionsByProjectRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -878,6 +896,8 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.OrchestratorSessionID,
+			&i.ParallelOrchestrator,
 		); err != nil {
 			return nil, err
 		}
@@ -934,28 +954,32 @@ UPDATE sessions SET
     auto_inject_ci = ?15,
     provision_state = ?16,
     provision_error = '',
-    is_task_preparation = 0
-WHERE id = ?17 AND is_task_preparation = 1
+    is_task_preparation = 0,
+    orchestrator_session_id = ?17,
+    parallel_orchestrator = ?18
+WHERE id = ?19 AND is_task_preparation = 1
 `
 
 type PromoteTaskPreparationParams struct {
-	IssueID            domain.IssueID
-	Kind               domain.SessionKind
-	Harness            domain.AgentHarness
-	AutoReviewEnabled  bool
-	DisplayName        string
-	ActivityState      domain.ActivityState
-	ActivityLastAt     time.Time
-	SessionMode        domain.SessionMode
-	Model              string
-	Effort             string
-	SessionPermissions string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	AutoInjectReview   bool
-	AutoInjectCI       bool
-	ProvisionState     domain.SessionProvisionState
-	ID                 domain.SessionID
+	IssueID               domain.IssueID
+	Kind                  domain.SessionKind
+	Harness               domain.AgentHarness
+	AutoReviewEnabled     bool
+	DisplayName           string
+	ActivityState         domain.ActivityState
+	ActivityLastAt        time.Time
+	SessionMode           domain.SessionMode
+	Model                 string
+	Effort                string
+	SessionPermissions    string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	AutoInjectReview      bool
+	AutoInjectCI          bool
+	ProvisionState        domain.SessionProvisionState
+	OrchestratorSessionID string
+	ParallelOrchestrator  bool
+	ID                    domain.SessionID
 }
 
 // Claim the hidden row without touching branch/workspace facts that may be
@@ -978,6 +1002,8 @@ func (q *Queries) PromoteTaskPreparation(ctx context.Context, arg PromoteTaskPre
 		arg.AutoInjectReview,
 		arg.AutoInjectCI,
 		arg.ProvisionState,
+		arg.OrchestratorSessionID,
+		arg.ParallelOrchestrator,
 		arg.ID,
 	)
 	if err != nil {

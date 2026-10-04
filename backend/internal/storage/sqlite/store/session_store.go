@@ -151,23 +151,25 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 	defer s.writeMu.Unlock()
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	rows, err := s.qw.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
-		IssueID:            rec.IssueID,
-		Kind:               rec.Kind,
-		Harness:            rec.Harness,
-		AutoReviewEnabled:  rec.AutoReviewEnabled,
-		DisplayName:        rec.DisplayName,
-		ActivityState:      activity.State,
-		ActivityLastAt:     activity.LastActivityAt,
-		SessionMode:        domain.NormalizeSessionMode(rec.Mode),
-		Model:              rec.Metadata.Model,
-		Effort:             rec.Metadata.Effort,
-		SessionPermissions: string(rec.Metadata.Permissions),
-		CreatedAt:          rec.CreatedAt,
-		UpdatedAt:          rec.UpdatedAt,
-		AutoInjectReview:   rec.AutoInjectReview,
-		AutoInjectCI:       rec.AutoInjectCI,
-		ProvisionState:     rec.ProvisionState.WithDefault(),
-		ID:                 id,
+		OrchestratorSessionID: string(rec.OrchestratorSessionID),
+		ParallelOrchestrator:  rec.ParallelOrchestrator,
+		IssueID:               rec.IssueID,
+		Kind:                  rec.Kind,
+		Harness:               rec.Harness,
+		AutoReviewEnabled:     rec.AutoReviewEnabled,
+		DisplayName:           rec.DisplayName,
+		ActivityState:         activity.State,
+		ActivityLastAt:        activity.LastActivityAt,
+		SessionMode:           domain.NormalizeSessionMode(rec.Mode),
+		Model:                 rec.Metadata.Model,
+		Effort:                rec.Metadata.Effort,
+		SessionPermissions:    string(rec.Metadata.Permissions),
+		CreatedAt:             rec.CreatedAt,
+		UpdatedAt:             rec.UpdatedAt,
+		AutoInjectReview:      rec.AutoInjectReview,
+		AutoInjectCI:          rec.AutoInjectCI,
+		ProvisionState:        rec.ProvisionState.WithDefault(),
+		ID:                    id,
 	})
 	if err != nil {
 		return false, fmt.Errorf("promote task preparation %s: %w", id, err)
@@ -660,6 +662,8 @@ func mapListAllSessionsRows(rows []gen.ListAllSessionsRow) []domain.SessionRecor
 
 func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	return domain.SessionRecord{
+		OrchestratorSessionID:     domain.SessionID(row.OrchestratorSessionID),
+		ParallelOrchestrator:      row.ParallelOrchestrator,
 		Revision:                  row.Revision,
 		ID:                        row.ID,
 		ProjectID:                 projectIDValue(row.ProjectID),
@@ -742,6 +746,8 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 	return gen.InsertSessionParams{
 		ID:                               rec.ID,
 		ProjectID:                        optionalProjectID(rec.ProjectID),
+		OrchestratorSessionID:            string(rec.OrchestratorSessionID),
+		ParallelOrchestrator:             rec.ParallelOrchestrator,
 		Num:                              num,
 		IssueID:                          rec.IssueID,
 		Kind:                             rec.Kind,

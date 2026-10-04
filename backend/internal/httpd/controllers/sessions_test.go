@@ -253,6 +253,15 @@ func (f *fakeSessionService) SpawnOrchestrator(ctx context.Context, projectID do
 	return s, err
 }
 
+func (f *fakeSessionService) SpawnParallelOrchestrator(ctx context.Context, projectID domain.ProjectID, mode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error) {
+	s, _, _, err := f.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: projectID, Kind: domain.KindOrchestrator,
+		ParallelOrchestrator: true, RequestedMode: mode,
+		AgentConfig: ports.AgentConfig{Permissions: approval},
+	})
+	return s, err
+}
+
 func (f *fakeSessionService) Get(_ context.Context, id domain.SessionID) (domain.Session, error) {
 	s, ok := f.sessions[id]
 	if !ok {
@@ -1686,6 +1695,19 @@ func TestSessionsAPI_OrchestratorAcceptsExplicitChatMode(t *testing.T) {
 	if svc.orchestratorMode != domain.SessionModeChat {
 		t.Fatalf("requested mode = %q, want chat", svc.orchestratorMode)
 	}
+}
+
+func TestSessionsAPI_ParallelOrchestratorUsesIndependentSpawnMode(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/orchestrators",
+		`{"projectId":"ao","mode":"chat","parallel":true}`)
+	if status != http.StatusCreated || !svc.lastSpawn.ParallelOrchestrator || svc.lastSpawn.RequestedMode != domain.SessionModeChat {
+		t.Fatalf("status=%d body=%s spawn=%#v", status, body, svc.lastSpawn)
+	}
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators",
+		`{"projectId":"ao","clean":true,"parallel":true}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "ORCHESTRATOR_MODE_CONFLICT")
 }
 
 func TestSessionsAPI_OrchestratorRejectsUnknownExplicitMode(t *testing.T) {

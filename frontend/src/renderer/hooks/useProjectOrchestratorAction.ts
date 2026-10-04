@@ -7,14 +7,12 @@ import { cloudSessionsQueryKey, workspaceQueryKey, type WorkspaceScope } from ".
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
 	isChatPreflightError,
-	resumeOrchestrator,
 	spawnOrchestrator,
 	type OrchestratorSpawnSource,
 } from "../lib/spawn-orchestrator";
 import { formatOrchestratorStartupError } from "../lib/orchestrator-startup-error";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { useUiStore } from "../stores/ui-store";
-import { useCanResumeAgent } from "./useCanResumeAgent";
 
 export function useProjectOrchestratorAction({
 	projectId,
@@ -22,12 +20,14 @@ export function useProjectOrchestratorAction({
 	orchestrator,
 	source,
 	sessionId,
+	taskOrchestratorId,
 }: {
 	projectId?: string;
 	project?: WorkspaceScope["project"];
 	orchestrator?: WorkspaceSession;
 	source: OrchestratorSpawnSource;
 	sessionId?: string;
+	taskOrchestratorId?: string;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -42,7 +42,6 @@ export function useProjectOrchestratorAction({
 	}, [routeKey]);
 	const isProjectRestarting = useUiStore((state) => projectId ? state.restartingProjectIds.has(projectId) : false);
 	const isProvisioning = useUiStore((state) => projectId ? state.provisioningProjectIds.has(projectId) : false);
-	const canResumeOrchestrator = useCanResumeAgent(orchestrator);
 	const startupError = useUiStore((state) => projectId ? state.orchestratorStartupErrors[projectId] : undefined);
 	const setStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const previousProjectId = useRef(projectId);
@@ -60,12 +59,8 @@ export function useProjectOrchestratorAction({
 		select: (mutation) => ({ status: mutation.state.status, error: mutation.state.error }),
 	});
 	const isSpawning = mutations.some((mutation) => mutation.status === "pending");
-	const resumableOrchestrator =
-		orchestrator && canResumeOrchestrator && project?.kind !== CLOUD_PROJECT_KIND
-			? orchestrator
-			: undefined;
 	const latest = mutations.at(-1);
-	const error = (!orchestrator || resumableOrchestrator) && !isSpawning && latest?.status === "error" ? latest.error : null;
+	const error = !isSpawning && latest?.status === "error" ? latest.error : null;
 	const spawnError = formatOrchestratorStartupError(
 		error ? (error instanceof Error ? error.message : t("shell.couldNotSpawn")) : startupError ?? "",
 	);
@@ -74,11 +69,9 @@ export function useProjectOrchestratorAction({
 		mutationFn: async (mode?: "tui") => {
 			if (!projectId) return;
 			setStartupError(projectId, null);
-			const openedSessionId = resumableOrchestrator
-				? (await resumeOrchestrator(resumableOrchestrator.id), resumableOrchestrator.id)
-				: project?.kind === CLOUD_PROJECT_KIND
-					? await spawnCloudOrchestrator(queryClient, projectId)
-					: await spawnOrchestrator(projectId, source, false, mode);
+			const openedSessionId = project?.kind === CLOUD_PROJECT_KIND
+				? await spawnCloudOrchestrator(queryClient, projectId)
+				: await spawnOrchestrator(projectId, source, false, mode, undefined, true);
 			await queryClient.invalidateQueries({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKey,
 			});
@@ -99,31 +92,29 @@ export function useProjectOrchestratorAction({
 			});
 		},
 	});
-	const openOrchestrator = (mode?: "tui") => {
+	const openOrchestrator = () => {
+		if (!projectId) return;
+		void navigate({ to: "/projects/$projectId/orchestrators", params: { projectId } });
+	};
+	const createOrchestrator = (mode?: "tui") => {
 		if (!projectId || isProjectRestarting || isProvisioning) return;
-		// Read the cache synchronously as well as disabling both rendered copies.
-		// Two clicks in the same render must still produce just one request.
 		if (queryClient.isMutating({ mutationKey, exact: true })) return;
-		void addRendererExceptionStep("Orchestrator open requested", {
-			source: "orchestrator-open", operation: "open_orchestrator",
+		if (project?.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
+			if (project) useUiStore.getState().openProjectSettings(projectId);
+			return;
+		}
+		void addRendererExceptionStep("Orchestrator creation requested", {
+			source: "orchestrator-open", operation: "create_orchestrator",
 			surface: sessionId ? "session_detail" : "project_board", project_id: projectId,
 		});
 		void captureRendererEvent("ao.renderer.orchestrator_open_requested", { project_id: projectId });
-		if (resumableOrchestrator) {
-			mutation.mutate(mode);
-		} else if (orchestrator) {
-			void navigate({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId: orchestrator.id } });
-		} else if (project?.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
-			if (project) useUiStore.getState().openProjectSettings(projectId);
-		} else {
-			mutation.mutate(mode);
-		}
+		mutation.mutate(mode);
 	};
 	const openNewTask = () => {
-		if (projectId && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId);
+		if (projectId && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, taskOrchestratorId);
 	};
 	return { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
-		canCreateAsTui: isChatPreflightError(error), openOrchestrator, openNewTask };
+		canCreateAsTui: isChatPreflightError(error), openOrchestrator, createOrchestrator, openNewTask };
 }
 
 export type ProjectOrchestratorAction = ReturnType<typeof useProjectOrchestratorAction>;

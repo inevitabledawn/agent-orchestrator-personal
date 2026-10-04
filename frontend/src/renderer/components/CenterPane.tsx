@@ -655,8 +655,8 @@ export function CenterPane({
 									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
 								>
 								<div className="flex w-max items-stretch">
-									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
-									{session ? (
+									{/* Orchestrator sessions are all represented by the shared Sessions tabs. */}
+									{session && isOrchestratorSession(session) && workspaceTabActions ? null : session ? (
 										<SessionPaneTab
 											isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
 											label={sessionTabLabel}

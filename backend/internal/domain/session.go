@@ -165,6 +165,8 @@ type SessionRecord struct {
 	// commit. A seed carrying AutomationRunID alone is not proof that its
 	// workspace/controller launch completed.
 	AutomationLaunchCompleted bool         `json:"-"`
+	OrchestratorSessionID     SessionID    `json:"orchestratorSessionId,omitempty"`
+	ParallelOrchestrator      bool         `json:"parallelOrchestrator,omitempty"`
 	IssueID                   IssueID      `json:"issueId,omitempty"`
 	Kind                      SessionKind  `json:"kind"`
 	Harness                   AgentHarness `json:"harness,omitempty"`

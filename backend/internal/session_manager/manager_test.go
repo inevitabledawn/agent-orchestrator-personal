@@ -5663,6 +5663,27 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 	}
 }
 
+func TestWorkerSystemPromptUsesPersistedOrchestratorOwner(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-a"] = domain.SessionRecord{ID: "mer-a", ProjectID: "mer", Kind: domain.KindOrchestrator, ParallelOrchestrator: true}
+	st.sessions["mer-b"] = domain.SessionRecord{ID: "mer-b", ProjectID: "mer", Kind: domain.KindOrchestrator, ParallelOrchestrator: true}
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	for _, owner := range []domain.SessionID{"mer-a", "mer-b"} {
+		prompt, err := m.buildSystemPromptForOwner(context.Background(), domain.KindWorker, "mer", owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := domain.SessionID("mer-a")
+		if owner == other {
+			other = "mer-b"
+		}
+		if !strings.Contains(prompt, "ao send --session "+string(owner)) || strings.Contains(prompt, "ao send --session "+string(other)) {
+			t.Fatalf("worker prompt for %s points to wrong owner", owner)
+		}
+	}
+}
+
 // TestRestore_OrchestratorRederivesSystemPrompt: the system prompt is derived,
 // not persisted, so a restored orchestrator must get its role instructions
 // recomputed and handed to the agent's native resume command.

@@ -58,8 +58,6 @@ import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
 import { IS_DEV } from "../lib/is-dev";
 import {
-	hasConfiguredOrchestratorAgent,
-	newestActiveOrchestrator,
 	openPRs,
 	type WorkspaceSession,
 	type WorkspaceSummary,
@@ -75,12 +73,9 @@ import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presen
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
-import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
-import { cloudSessionsQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
-import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
-import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
@@ -496,6 +491,10 @@ function useSelection() {
 		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
 		[navigate],
 	);
+	const goOrchestrators = useCallback(
+		(projectId: string) => void navigate({ to: "/projects/$projectId/orchestrators", params: { projectId } }),
+		[navigate],
+	);
 	const goSession = useCallback(
 		(projectId: string, sessionId: string) => {
 			if (projectId === STANDALONE_WORKSPACE_ID) {
@@ -523,8 +522,9 @@ function useSelection() {
 		goConnectMobile,
 		goSettings,
 		goProject,
+		goOrchestrators,
 		goSession,
-	}), [goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.projectId, params.sessionId, pathname]);
+	}), [goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goOrchestrators, goSession, goSettings, goStandaloneBoard, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -1242,11 +1242,9 @@ const ProjectItem = memo(function ProjectItem({
 			(session) => session.id === selection.activeSessionId && session.kind === "orchestrator",
 		);
 	const projectActive = dashboardActive || orchestratorActive;
-	const queryClient = useQueryClient();
 	const [removeError, setRemoveError] = useState<string | null>(null);
 	const [isRemoving, setIsRemoving] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
-	const [isSpawning, setIsSpawning] = useState(false);
 	// Skip enter animation on first mount — sessions arrive async and we don't
 	// want them to slide in on every sidebar load. Only animate on subsequent
 	// expand/collapse toggles.
@@ -1259,7 +1257,6 @@ const ProjectItem = memo(function ProjectItem({
 	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(workspace.id));
 	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(workspace.id));
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const projectIsDragging = isDragged;
 	// Keep completed PR sessions reachable while their runtime still exists.
 	// Only termination removes a worker from the sidebar; archived sessions stay
@@ -1305,74 +1302,15 @@ const ProjectItem = memo(function ProjectItem({
 		},
 		[selection, sessions, workspace],
 	);
-	// The project's live orchestrator (if any) backs the hover Orchestrator
-	// button: navigate to it when present, otherwise spawn one first.
-	const orchestrator = newestActiveOrchestrator(workspace.sessions);
-	const canResumeOrchestrator = useCanResumeAgent(orchestrator);
 	const toggleDisclosure = () => {
 		hasInteractedWithDisclosure.current = true;
 		onToggle(workspace.id);
 	};
 
-	// Mirrors ShellTopbar's launcher: attach to the running orchestrator, or
-	// spawn one via the daemon and follow it once the workspace refetches.
-	// Expand a collapsed project so opening the orchestrator also reveals its
-	// session list — otherwise the tree stays shut while you're inside it.
-	const openOrchestrator = async () => {
-		if (isProjectProvisioning || isProjectRestarting) return;
+	// Navigation must not create or relaunch an agent.
+	const openOrchestrator = () => {
 		if (!expanded) toggleDisclosure();
-		if (orchestrator) {
-			// Mirrors useProjectOrchestratorAction; both launchers must stay in step.
-			if (canResumeOrchestrator && workspace.kind !== "cloud") {
-				setIsSpawning(true);
-				try {
-					await resumeOrchestrator(orchestrator.id);
-					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-				} catch (err) {
-					console.error("Failed to resume orchestrator:", err);
-					showGlobalToast(
-						t("inspector.resumeAgent"),
-						err instanceof Error ? err.message : t("shell.couldNotSpawn"),
-						"error",
-					);
-					return;
-				} finally {
-					setIsSpawning(false);
-				}
-			}
-			selection.goSession(workspace.id, orchestrator.id);
-			return;
-		}
-		// A cloud project has no local orchestrator-agent config, so the settings
-		// fallback below would dead-end it. Spawn the orchestrator as a cloud
-		// session in its own sandbox instead.
-		if (workspace.kind === "cloud") {
-			setIsSpawning(true);
-			try {
-				const sessionId = await spawnCloudOrchestrator(queryClient, workspace.id);
-				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				selection.goSession(workspace.id, sessionId);
-			} catch (err) {
-				console.error("Failed to spawn cloud orchestrator:", err);
-			} finally {
-				setIsSpawning(false);
-			}
-			return;
-		}
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-			selection.goSettings(workspace.id);
-			return;
-		}
-		setIsSpawning(true);
-		try {
-			const sessionId = await spawnOrchestrator(workspace.id, "sidebar");
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			selection.goSession(workspace.id, sessionId);
-		} catch (err) {
-			console.error("Failed to spawn orchestrator:", err);
-		} finally {
-			setIsSpawning(false);
-		}
+		selection.goOrchestrators(workspace.id);
 	};
 
 	// Expanded + already on the project board → collapse. Expanded + on a
@@ -1564,16 +1502,10 @@ const ProjectItem = memo(function ProjectItem({
 											<button
 												aria-current={orchestratorActive ? "page" : undefined}
 												aria-label={
-													orchestrator
-														? t("shell.openProjectOrchestrator", {
-																name: workspace.name,
-															})
-														: t("shell.spawnProjectOrchestrator", {
-																name: workspace.name,
-															})
+													t("shell.openProjectOrchestrator", { name: workspace.name })
 												}
 													className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
-													disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+													disabled={isProjectProvisioning || isProjectRestarting}
 												onClick={() => void openOrchestrator()}
 												type="button"
 											>
@@ -1582,14 +1514,8 @@ const ProjectItem = memo(function ProjectItem({
 										</span>
 									</TooltipTrigger>
 										<TooltipContent>
-											{isProjectProvisioning || isProjectRestarting
-												? t("shell.restarting")
-												: isSpawning
-												? t("shell.spawning")
-												: orchestrator
-													? t("shell.orchestrator")
-													: t("shell.spawnOrchestratorLower")}
-									</TooltipContent>
+											{t("shell.orchestrator")}
+										</TooltipContent>
 								</Tooltip>
 								<DropdownMenu>
 									<DropdownMenuTrigger asChild>

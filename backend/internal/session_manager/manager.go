@@ -898,12 +898,37 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if projectKind == domain.ProjectKindScratch && strings.TrimSpace(cfg.Branch) != "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrScratchBranchUnsupported)
 	}
+	legacyParent := false
+	if cfg.ParallelOrchestrator && cfg.Kind != domain.KindOrchestrator {
+		return domain.SessionRecord{}, 0, 0, errors.New("spawn: parallel orchestrator flag requires an orchestrator session")
+	}
+	if cfg.Kind == domain.KindWorker && cfg.ParentSessionID != "" {
+		parent, found, err := m.store.GetSession(ctx, cfg.ParentSessionID)
+		if err != nil {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: load parent orchestrator: %w", err)
+		}
+		if found && parent.Kind == domain.KindOrchestrator {
+			if parent.ProjectID != cfg.ProjectID || parent.IsTerminated || parent.Activity.State == domain.ActivityExited {
+				return domain.SessionRecord{}, 0, 0, errors.New("spawn: parent orchestrator must be active in the same project")
+			}
+			legacyParent = !parent.ParallelOrchestrator
+		} else {
+			// AO_SESSION_ID is also present in worker processes. A nested worker
+			// is not automatically owned by the parent worker.
+			cfg.ParentSessionID = ""
+		}
+	}
 	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" {
 		permissions, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 		}
 		cfg.AgentConfig.Permissions = permissions
+	}
+	if legacyParent {
+		// Legacy project workers follow clean replacement as they always have.
+		// Only parallel coordinators create permanently owned workers.
+		cfg.ParentSessionID = ""
 	}
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
@@ -1101,6 +1126,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		branch = prep.record.Metadata.Branch
 	} else if branch == "" {
 		branch = DefaultSpawnBranch(id, cfg.Kind, sessionPrefix(project), projectKind, m.dataDir)
+		if cfg.ParallelOrchestrator && projectKind == domain.ProjectKindSingleRepo {
+			branch = aoBranch(generatedBranchNamespace(m.dataDir), string(id), "root")
+		}
 	}
 
 	// An asynchronous Chat spawn stops here and answers the caller. Everything
@@ -2812,7 +2840,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	// Recompute standing instructions, then reapply the durable finalized inbound
 	// handoff for this exact native conversation when one exists.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPromptForOwner(ctx, rec.Kind, rec.ProjectID, rec.OrchestratorSessionID)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -4844,15 +4872,17 @@ func normalizeWorkspacePath(p string) string {
 
 func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
 	return domain.SessionRecord{
-		ProjectID:       cfg.ProjectID,
-		IssueID:         cfg.IssueID,
-		AutomationRunID: cfg.AutomationRunID,
-		Kind:            cfg.Kind,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		Harness:         cfg.Harness,
-		DisplayName:     cfg.DisplayName,
-		Activity:        domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		AutomationRunID:       cfg.AutomationRunID,
+		ProjectID:             cfg.ProjectID,
+		OrchestratorSessionID: cfg.ParentSessionID,
+		ParallelOrchestrator:  cfg.ParallelOrchestrator,
+		IssueID:               cfg.IssueID,
+		Kind:                  cfg.Kind,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+		Harness:               cfg.Harness,
+		DisplayName:           cfg.DisplayName,
+		Activity:              domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
@@ -5060,7 +5090,7 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // empty input box rather than receiving an auto-generated kickoff turn.
 func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig) (prompt, systemPrompt string, err error) {
 	prompt = buildPrompt(cfg)
-	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID)
+	systemPrompt, err = m.buildSystemPromptForOwner(ctx, cfg.Kind, cfg.ProjectID, cfg.ParentSessionID)
 	if err != nil {
 		return "", "", err
 	}
@@ -5072,6 +5102,10 @@ func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig) (p
 // rather than persisting them, so a restored worker points at the orchestrator
 // that is active now, not the one from its original spawn.
 func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {
+	return m.buildSystemPromptForOwner(ctx, kind, projectID, "")
+}
+
+func (m *Manager) buildSystemPromptForOwner(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, ownerID domain.SessionID) (string, error) {
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
@@ -5090,6 +5124,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
 			if err != nil {
 				return "", err
+			}
+			if ownerID != "" {
+				orchestratorID, ok = ownerID, true
 			}
 			if ok {
 				cfg.OrchestratorSessionID = string(orchestratorID)
@@ -5172,7 +5209,7 @@ func (m *Manager) activeOrchestratorSessionID(ctx context.Context, project domai
 		return "", false, fmt.Errorf("list sessions for %s: %w", project, err)
 	}
 	for _, rec := range recs {
-		if rec.Kind == domain.KindOrchestrator && !rec.IsTerminated {
+		if rec.Kind == domain.KindOrchestrator && !rec.ParallelOrchestrator && !rec.IsTerminated {
 			return rec.ID, true, nil
 		}
 	}

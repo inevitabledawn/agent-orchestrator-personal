@@ -69,6 +69,75 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	}
 }
 
+func TestCoordinatorKeepsParallelWorkerReportsWithTheirOwners(t *testing.T) {
+	now := time.Date(2026, 9, 29, 20, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{
+		{ID: "orch-a", ProjectID: "p", Kind: domain.KindOrchestrator, ParallelOrchestrator: true, Mode: domain.SessionModeChat},
+		{ID: "orch-b", ProjectID: "p", Kind: domain.KindOrchestrator, ParallelOrchestrator: true, Mode: domain.SessionModeChat},
+	}
+	a := reportAt("a", "worker-a", now, now, "from A")
+	a.OrchestratorSessionID = "orch-a"
+	b := reportAt("b", "worker-b", now, now, "from B")
+	b.OrchestratorSessionID = "orch-b"
+	store.add(a, b)
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 2 {
+		t.Fatalf("submissions = %#v, want two isolated deliveries", delivery.submissions)
+	}
+	for _, submission := range delivery.submissions {
+		if submission.target == "orch-a" && (!strings.Contains(submission.message, "from A") || strings.Contains(submission.message, "from B")) ||
+			submission.target == "orch-b" && (!strings.Contains(submission.message, "from B") || strings.Contains(submission.message, "from A")) {
+			t.Fatalf("cross-owner delivery = %#v", submission)
+		}
+	}
+
+	infoA := reportAt("info-a", "worker-a", now, now.Add(time.Hour), "piggyback A")
+	infoA.OrchestratorSessionID = "orch-a"
+	infoB := reportAt("info-b", "worker-b", now, now.Add(time.Hour), "piggyback B")
+	infoB.OrchestratorSessionID = "orch-b"
+	store.add(infoA, infoB)
+	batch, err := c.PreparePiggyback(context.Background(), "orch-a")
+	if err != nil || len(batch.Reports) != 1 || batch.Reports[0].ID != "info-a" {
+		t.Fatalf("A piggyback = %#v, %v", batch, err)
+	}
+	if err := c.AcceptPiggyback(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	batch, err = c.PreparePiggyback(context.Background(), "orch-b")
+	if err != nil || len(batch.Reports) != 1 || batch.Reports[0].ID != "info-b" {
+		t.Fatalf("B piggyback = %#v, %v", batch, err)
+	}
+}
+
+func TestCoordinatorUnavailableOwnerDoesNotBlockAnotherOwner(t *testing.T) {
+	now := time.Date(2026, 9, 29, 21, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{
+		{ID: "orch-a", ProjectID: "p", Kind: domain.KindOrchestrator, ParallelOrchestrator: true, IsTerminated: true},
+		{ID: "orch-b", ProjectID: "p", Kind: domain.KindOrchestrator, ParallelOrchestrator: true, Mode: domain.SessionModeChat},
+	}
+	a := reportAt("a", "worker-a", now, now, "from A")
+	a.OrchestratorSessionID = "orch-a"
+	b := reportAt("b", "worker-b", now, now, "from B")
+	b.OrchestratorSessionID = "orch-b"
+	store.add(a, b)
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	_, _ = c.RunDue(context.Background())
+	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "orch-b" ||
+		!strings.Contains(delivery.submissions[0].message, "from B") || strings.Contains(delivery.submissions[0].message, "from A") {
+		t.Fatalf("submissions = %#v, want only B", delivery.submissions)
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending {
+		t.Fatalf("A report = %s, want pending", store.reports[0].DeliveryState)
+	}
+}
+
 func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
@@ -182,7 +251,7 @@ func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (d
 	}
 	return domain.SessionRecord{}, false, nil
 }
-func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error) {
+func (s *coordinatorStore) ListPendingReportSchedule(_ context.Context, limit int64) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var pending []domain.ReportRecord
@@ -192,17 +261,26 @@ func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]
 		}
 	}
 	sortReports(pending)
-	if len(pending) > 1 {
-		pending = pending[:1]
+	owners := make(map[string]bool)
+	heads := make([]domain.ReportRecord, 0, len(pending))
+	for _, rec := range pending {
+		key := string(rec.ProjectID) + "/" + string(rec.OrchestratorSessionID)
+		if !owners[key] {
+			owners[key] = true
+			heads = append(heads, rec)
+		}
+		if int64(len(heads)) >= limit {
+			break
+		}
 	}
-	return pending, nil
+	return heads, nil
 }
-func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
+func (s *coordinatorStore) ClaimPendingReportBatchForOwner(_ context.Context, project domain.ProjectID, owner domain.SessionID, token string, at time.Time) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	batchID := ""
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
+		if s.reports[i].ProjectID == project && s.reports[i].OrchestratorSessionID == owner && s.reports[i].DeliveryState == domain.ReportPending {
 			batchID = s.reports[i].DeliveryBatchID
 			if batchID == "" {
 				batchID = "report-batch:" + s.reports[i].ID
@@ -212,7 +290,7 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 	}
 	var claimed []domain.ReportRecord
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
+		if s.reports[i].ProjectID == project && s.reports[i].OrchestratorSessionID == owner && s.reports[i].DeliveryState == domain.ReportPending {
 			if s.reports[i].DeliveryBatchID != "" && s.reports[i].DeliveryBatchID != batchID {
 				continue
 			}

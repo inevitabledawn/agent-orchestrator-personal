@@ -61,11 +61,12 @@ export async function spawnOrchestrator(
 	clean = false,
 	mode?: SessionMode,
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
+	parallel = false,
 ): Promise<string> {
 	void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", { project_id: projectId, source });
 	try {
 		const { data, error, response } = await apiClient.POST("/api/v1/orchestrators", {
-			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
+			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}), ...(parallel ? { parallel: true } : {}) },
 		});
 
 		if (error || !data?.orchestrator?.id) {

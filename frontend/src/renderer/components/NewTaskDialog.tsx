@@ -6,11 +6,12 @@ import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 type NewTaskDialogProps = {
 	open: boolean;
 	projectId?: string;
+	orchestratorId?: string;
 	onCreated: (sessionId: string) => void;
 	onOpenChange: (open: boolean) => void;
 };
 
-export function NewTaskDialog({ open, projectId, onCreated, onOpenChange }: NewTaskDialogProps) {
+export function NewTaskDialog({ open, projectId, orchestratorId, onCreated, onOpenChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
 	return (
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -25,6 +26,7 @@ export function NewTaskDialog({ open, projectId, onCreated, onOpenChange }: NewT
 					</Dialog.Description>
 					<TaskComposer
 						projectId={projectId}
+						orchestratorId={orchestratorId}
 						autoFocusTitle
 						onCreated={(sessionId) => {
 							onCreated(sessionId);

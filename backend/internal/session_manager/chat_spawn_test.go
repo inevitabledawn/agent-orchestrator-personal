@@ -1252,6 +1252,30 @@ func TestChatSpawnStartsControllerAndNoRuntime(t *testing.T) {
 	}
 }
 
+func TestParallelChatOrchestratorsHaveIndependentBranchesAndControllers(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, _, runtime := newChatManager(launcher)
+	var sessions []domain.SessionRecord
+	for range 2 {
+		rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+			ProjectID: chatTestProject, Kind: domain.KindOrchestrator,
+			Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat,
+			ParallelOrchestrator: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, rec)
+	}
+	if sessions[0].ID == sessions[1].ID || sessions[0].Metadata.Branch == sessions[1].Metadata.Branch ||
+		!sessions[0].ParallelOrchestrator || !sessions[1].ParallelOrchestrator {
+		t.Fatalf("parallel sessions share identity or branch: %#v", sessions)
+	}
+	if len(launcher.started) != 2 || !launcher.started[0].ParallelOrchestrator || !launcher.started[1].ParallelOrchestrator || runtime.created != 0 {
+		t.Fatalf("controller starts = %#v; terminal runtimes = %d", launcher.started, runtime.created)
+	}
+}
+
 func TestChatSpawnPersistsBrowserCapabilityBeforeControllerStart(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, runtime := newChatManager(launcher)

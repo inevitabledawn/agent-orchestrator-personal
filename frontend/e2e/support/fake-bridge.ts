@@ -376,6 +376,9 @@ export type FakeAgentOptions = {
 	platform?: string;
 	/** Worker sessions present at first paint. */
 	workers?: FakeWorker[];
+	/** Additional orchestrator sessions present at first paint. */
+	orchestrators?: FakeWorker[];
+	parallelOrchestrators?: boolean;
 };
 
 /**
@@ -386,6 +389,7 @@ export type FakeAgentOptions = {
 export type FakeAgentController = {
 	snapshot: () => unknown[];
 	createWorker: (worker: FakeWorker) => void;
+	createOrchestrator: (worker: FakeWorker) => void;
 	removeWorker: (id: string) => void;
 	setStatus: (id: string, status: string, activity?: string) => void;
 	setTerminalHandle: (id: string, handleId: string) => void;
@@ -417,11 +421,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 	const projectName = opts.projectName ?? "fake-proj";
 	const platform = opts.platform ?? null;
 	const workers = opts.workers ?? [];
+	const orchestrators = opts.orchestrators ?? [];
+	const parallelOrchestrators = opts.parallelOrchestrators ?? false;
 	// Renderer reload does not create a new daemon session incarnation.
 	const nowIso = new Date().toISOString();
 
 	await page.addInitScript(
-		({ version, daemonPort, projectId, projectName, platform, workers, nowIso }) => {
+		({ version, daemonPort, projectId, projectName, platform, workers, orchestrators, parallelOrchestrators, nowIso }) => {
 			if (platform) {
 				try {
 					Object.defineProperty(navigator, "platform", { get: () => platform, configurable: true });
@@ -455,14 +461,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return "building";
 				}
 			};
-			const makeWorker = (w: (typeof workers)[number]): Session => ({
+			const makeWorker = (w: (typeof workers)[number], kind: "worker" | "orchestrator" = "worker"): Session => ({
 				id: w.id,
 				terminalHandleId: (w.mode ?? "tui") === "tui" ? `${w.id}/terminal_0` : undefined,
 				workspaceId: projectId,
 				workspaceName: projectName,
 				title: w.title,
 				provider: w.provider ?? "codex",
-				kind: "worker",
+				kind,
+				parallelOrchestrator: kind === "orchestrator" && parallelOrchestrators,
 				mode: w.mode ?? "tui",
 				branch: w.branch ?? `session/${w.id}`,
 				status: w.status ?? "working",
@@ -491,6 +498,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						title: "Project orchestrator",
 						provider: "codex",
 						kind: "orchestrator",
+						parallelOrchestrator: parallelOrchestrators,
 						branch: "main",
 						status: "working",
 						kanbanColumn: "building",
@@ -499,7 +507,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						activity: { state: "active", lastActivityAt: nowIso },
 						prs: [],
 					},
-					...workers.map(makeWorker),
+					...orchestrators.map((session) => makeWorker(session, "orchestrator")),
+					...workers.map((worker) => makeWorker(worker)),
 				],
 			};
 
@@ -586,6 +595,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				snapshot: () => JSON.parse(JSON.stringify(state.workspaces)),
 				createWorker: (w) => {
 					if (!findSession(w.id)) (project.sessions as Session[]).push(makeWorker(w));
+					pushWorkspaces("session_created");
+				},
+				createOrchestrator: (worker) => {
+					if (!findSession(worker.id)) (project.sessions as Session[]).push(makeWorker(worker, "orchestrator"));
 					pushWorkspaces("session_created");
 				},
 				removeWorker: (id) => {
@@ -890,6 +903,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonPort, projectId, projectName, platform, workers, nowIso },
+		{ version, daemonPort, projectId, projectName, platform, workers, orchestrators, parallelOrchestrators, nowIso },
 	);
 }

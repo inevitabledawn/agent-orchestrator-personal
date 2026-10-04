@@ -125,12 +125,16 @@ func TestTaskPreparationPromotionPreservesWorkspace(t *testing.T) {
 	visible := sampleRecord("mer")
 	visible.Harness = domain.HarnessCodex
 	visible.Metadata.Effort = "high"
+	visible.OrchestratorSessionID = "orchestrator-owner"
 	if ok, err := s.PromoteTaskPreparation(ctx, created.ID, visible); err != nil || !ok {
 		t.Fatalf("promote preparation = %v, %v", ok, err)
 	}
 	got, ok, err := s.GetSession(ctx, created.ID)
 	if err != nil || !ok {
 		t.Fatalf("get promoted session = %v, %v", ok, err)
+	}
+	if got.OrchestratorSessionID != "orchestrator-owner" {
+		t.Fatalf("prepared worker lost its orchestrator owner: %q", got.OrchestratorSessionID)
 	}
 	if got.IsTaskPreparation || got.Harness != domain.HarnessCodex || got.Metadata.Effort != "high" || got.Metadata.Branch != "ao/mer-1/root" || got.Metadata.WorkspacePath != "/prepared" {
 		t.Fatalf("promoted session = %+v", got)

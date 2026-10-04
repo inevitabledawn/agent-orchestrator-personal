@@ -3436,6 +3436,8 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            orchestratorSessionId?: string;
+            parallelOrchestrator?: boolean;
             /** Format: date-time */
             pinnedAt?: null | string;
             /** Format: int64 */
@@ -3786,6 +3788,7 @@ export interface components {
             /** @enum {string} */
             mode?: "tui" | "chat";
             model?: string;
+            orchestratorId?: string;
             projectId: string;
             taskPreparation?: string;
         };
@@ -4871,6 +4874,7 @@ export interface components {
             clean?: boolean;
             /** @enum {string} */
             mode?: "chat" | "tui";
+            parallel?: boolean;
             projectId: string;
         };
         SpawnOrchestratorResponse: {

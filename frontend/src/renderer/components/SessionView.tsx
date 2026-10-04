@@ -29,6 +29,7 @@ import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { NotificationCenter } from "./NotificationCenter";
+import { ProjectOrchestratorTabs } from "./OrchestratorSessionTabs";
 import { ResizeHandle } from "./ResizeHandle";
 import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
@@ -1969,6 +1970,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	// Spinner replaces the ⋮ at the same size, so the tab title does not need a
 	// wider action slot while switching.
 	const sessionTabActionWide = false;
+	const orchestratorSessionTabs = session && isOrchestrator && !session.cloud ? (
+		<ProjectOrchestratorTabs
+			currentSessionId={session.id}
+			projectId={session.workspaceId}
+			tabAction={sessionTabActions}
+		/>
+	) : undefined;
 
 	useEffect(() => {
 		setHandoffDialogOpen(false);
@@ -2318,6 +2326,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									tabStripAction={newShellTerminalAction}
 									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
+									workspaceTabActions={orchestratorSessionTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
@@ -2367,6 +2376,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									tabStripAction={newShellTerminalAction}
 									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
+									workspaceTabActions={orchestratorSessionTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}

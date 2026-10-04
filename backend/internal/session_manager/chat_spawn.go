@@ -223,6 +223,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		SessionID:               id,
 		ProjectID:               in.cfg.ProjectID,
 		Kind:                    in.cfg.Kind,
+		ParallelOrchestrator:    in.record.ParallelOrchestrator,
 		Harness:                 in.cfg.Harness,
 		DataDir:                 m.dataDir,
 		WorkspacePath:           in.workspace.Path,
@@ -429,7 +430,7 @@ func (m *Manager) resumeChatController(
 
 	// Recomputed rather than persisted, matching the terminal path: a restored
 	// session keeps its standing instructions across the relaunch.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPromptForOwner(ctx, rec.Kind, rec.ProjectID, rec.OrchestratorSessionID)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -466,6 +467,7 @@ func (m *Manager) resumeChatController(
 		SessionID:               rec.ID,
 		ProjectID:               rec.ProjectID,
 		Kind:                    rec.Kind,
+		ParallelOrchestrator:    rec.ParallelOrchestrator,
 		Harness:                 rec.Harness,
 		DataDir:                 m.dataDir,
 		WorkspacePath:           ws.Path,

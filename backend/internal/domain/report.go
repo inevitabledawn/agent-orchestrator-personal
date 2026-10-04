@@ -109,24 +109,25 @@ const (
 // ReportRecord is the durable report and outbox persistence shape. State and
 // outputs are independent, and neither changes authoritative session state.
 type ReportRecord struct {
-	ID                 string
-	SessionID          SessionID
-	ProjectID          ProjectID
-	State              ReportState
-	Note               string
-	Message            string
-	Outputs            []ReportOutput
-	CreatedAt          time.Time
-	DeliveryState      ReportDeliveryState
-	AvailableAt        time.Time
-	SettlementDeadline time.Time
-	RepeatCount        int64
-	ClaimToken         string
-	ClaimedAt          time.Time
-	DeliveryAttempts   int64
-	AcknowledgedAt     time.Time
-	LastError          string
-	DeliveryBatchID    string
+	ID                    string
+	SessionID             SessionID
+	ProjectID             ProjectID
+	OrchestratorSessionID SessionID
+	State                 ReportState
+	Note                  string
+	Message               string
+	Outputs               []ReportOutput
+	CreatedAt             time.Time
+	DeliveryState         ReportDeliveryState
+	AvailableAt           time.Time
+	SettlementDeadline    time.Time
+	RepeatCount           int64
+	ClaimToken            string
+	ClaimedAt             time.Time
+	DeliveryAttempts      int64
+	AcknowledgedAt        time.Time
+	LastError             string
+	DeliveryBatchID       string
 }
 
 // ErrInvalidReport reports an invalid report or delivery transition input.

@@ -315,7 +315,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 				reorder visible tabs
 			</button>
 			{headerActions}
-			{sessionTabAction}
+			{workspaceTabActions ? null : sessionTabAction}
 			<div role="tablist">
 				{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
 				{workspaceTabActions}
@@ -432,7 +432,7 @@ vi.mock("./CenterPane", () => ({
 				{auxiliaryTabOrder?.join("|") ?? ""}
 			</div>
 			{topbarActions}
-			{sessionTabAction}
+			{workspaceTabActions ? null : sessionTabAction}
 			<div role="tablist">
 				{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
 				{workspaceTabActions}

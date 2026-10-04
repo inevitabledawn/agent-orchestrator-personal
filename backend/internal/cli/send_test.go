@@ -37,6 +37,16 @@ func sendServer(t *testing.T, status int, respBody string) (*httptest.Server, *s
 	t.Helper()
 	capture := &sendCapture{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/aa-47" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"session":{"id":"aa-47","projectId":"demo","kind":"worker","orchestratorSessionId":"demo-1"}}`)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-1","projectId":"demo","kind":"orchestrator"}}`)
+			return
+		}
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
@@ -93,6 +103,15 @@ func TestSend_SteerActiveTurnUsesProviderSteeringWithoutQueueing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/internal/") {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/api/v1/sessions/source-2" {
+				_, _ = io.WriteString(w, `{"session":{"id":"source-2","projectId":"demo","kind":"worker","orchestratorSessionId":"demo-1"}}`)
+			} else {
+				_, _ = io.WriteString(w, `{"session":{"id":"demo-1","projectId":"demo","kind":"orchestrator"}}`)
+			}
 			return
 		}
 		paths = append(paths, r.URL.Path)
@@ -453,6 +472,32 @@ func TestSend_PrefixesMessageWithSenderSessionID(t *testing.T) {
 	want := "[from aa-47]   hi  "
 	if req.Message != want {
 		t.Errorf("captured message = %q, want %q", req.Message, want)
+	}
+}
+
+func TestSendRejectsWorkerOwnedByAnotherOrchestrator(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "orch-a")
+	cfg := setConfigEnv(t)
+	postCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/worker-b/send" {
+			postCalls++
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == "/api/v1/sessions/orch-a" {
+			_, _ = io.WriteString(w, `{"session":{"id":"orch-a","projectId":"demo","kind":"orchestrator","parallelOrchestrator":true}}`)
+		} else {
+			_, _ = io.WriteString(w, `{"session":{"id":"worker-b","projectId":"demo","kind":"worker","orchestratorSessionId":"orch-b"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "worker-b", "--message", "do this")
+	if err == nil || !strings.Contains(err.Error(), "belongs to another orchestrator") || postCalls != 0 {
+		t.Fatalf("cross-owner send err=%v, post calls=%d", err, postCalls)
 	}
 }
 

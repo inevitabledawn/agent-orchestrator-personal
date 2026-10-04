@@ -186,6 +186,42 @@ func TestProjectConversationRebindsAcrossOrchestratorReplacement(t *testing.T) {
 	}
 }
 
+func TestParallelOrchestratorConversationsDoNotRebindProjectHistory(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "project-chat")
+	legacy := sampleRecord("project-chat")
+	legacy.Kind, legacy.Mode = domain.KindOrchestrator, domain.SessionModeChat
+	legacy, err := s.CreateSession(ctx, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectConversation, err := s.CreateConversation(ctx, "project-history", domain.ConversationScopeProject, "project-chat", legacy.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"parallel-a", "parallel-b"} {
+		rec := sampleRecord("project-chat")
+		rec.Kind, rec.Mode, rec.ParallelOrchestrator = domain.KindOrchestrator, domain.SessionModeChat, true
+		rec, err = s.CreateSession(ctx, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conversation, err := s.CreateConversation(ctx, id, domain.ConversationScopeSession, "project-chat", rec.ID, histClock)
+		if err != nil || conversation.ID != id {
+			t.Fatalf("parallel conversation = %#v, %v", conversation, err)
+		}
+		owned, err := s.ConversationForSession(ctx, rec.ID)
+		if err != nil || owned.ID != id {
+			t.Fatalf("session %s history = %#v, %v", rec.ID, owned, err)
+		}
+	}
+	stillLegacy, err := s.ConversationForSession(ctx, legacy.ID)
+	if err != nil || stillLegacy.ID != projectConversation.ID {
+		t.Fatalf("legacy history changed: %#v, %v", stillLegacy, err)
+	}
+}
+
 func TestProviderArchiveAndProjectionCommitAtomically(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()

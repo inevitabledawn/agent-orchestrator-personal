@@ -145,6 +145,18 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	it("sends the selected orchestrator when creating a local worker", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.post.mockResolvedValue({ data: { workerId: "worker-1" } });
+		render(<Wrap><TaskComposer projectId="proj-1" orchestratorId="orch-2" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Investigate the issue" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
+			"/api/v1/orchestrators/delegate",
+			expect.objectContaining({ body: expect.objectContaining({ orchestratorId: "orch-2" }) }),
+		));
+	});
 	it("preselects the highest-ranked ready agent for a standalone task", async () => {
 		h.agentCatalog = {
 			agents: [

@@ -7,6 +7,7 @@ export const ORCHESTRATOR_SPAWN_SOURCES = [
 	"project_clone",
 	"settings",
 	"restart",
+	"session_tab",
 	"command_palette",
 ] as const;
 

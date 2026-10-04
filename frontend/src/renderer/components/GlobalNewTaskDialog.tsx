@@ -18,6 +18,7 @@ export function GlobalNewTaskDialog() {
 	const newTaskRequest = useUiStore((state) => state.newTaskRequest);
 	const [open, setOpen] = useState(false);
 	const [projectId, setProjectId] = useState<string | undefined>(undefined);
+	const [orchestratorId, setOrchestratorId] = useState<string | undefined>(undefined);
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
 
 	useEffect(() => {
@@ -28,6 +29,7 @@ export function GlobalNewTaskDialog() {
 		// not replay the ignored request when the user later closes the dialog.
 		if (open) return;
 		setProjectId(newTaskRequest.projectId);
+		setOrchestratorId(newTaskRequest.orchestratorId);
 		setOpen(true);
 	}, [newTaskRequest, open]);
 
@@ -48,6 +50,7 @@ export function GlobalNewTaskDialog() {
 		<NewTaskDialog
 			open={open}
 			projectId={projectId}
+			orchestratorId={orchestratorId}
 			onCreated={(sessionId) => void handleCreated(sessionId)}
 			onOpenChange={setOpen}
 		/>

@@ -226,6 +226,12 @@ describe("findProjectOrchestrator", () => {
 		expect(newestActiveOrchestrator([oldUpdate, newUpdate])).toBe(newUpdate);
 		expect(newestActiveOrchestrator([newUpdate, sameTimesHigherID])).toBe(sameTimesHigherID);
 	});
+
+	it("keeps project-level actions on the legacy orchestrator when parallel sessions exist", () => {
+		const legacy = sessionWith({ id: "skills-1", kind: "orchestrator", status: "working" });
+		const parallel = sessionWith({ id: "skills-2", kind: "orchestrator", status: "working", parallelOrchestrator: true });
+		expect(newestActiveOrchestrator([legacy, parallel])).toBe(legacy);
+	});
 });
 
 describe("sessionNeedsAttention", () => {
@@ -248,6 +254,16 @@ describe("sessionNeedsAttention", () => {
 });
 
 describe("orchestratorHealth", () => {
+	it("recognizes live parallel orchestrators without reporting expected parallelism as duplicates", () => {
+		const older = sessionWith({ id: "skills-2", kind: "orchestrator", provider: "codex", parallelOrchestrator: true, isTerminated: false, createdAt: "2026-01-01T00:00:00Z" });
+		const newer = sessionWith({ id: "skills-3", kind: "orchestrator", provider: "codex", parallelOrchestrator: true, isTerminated: false, createdAt: "2026-01-02T00:00:00Z" });
+		const dead = sessionWith({ id: "skills-1", kind: "orchestrator", provider: "codex", isTerminated: true, status: "terminated" });
+		const workspace: WorkspaceSummary = { id: "skills", name: "skills", path: "/tmp/skills", orchestratorAgent: "codex", sessions: [dead, older, newer] };
+		expect(newestActiveOrchestrator(workspace.sessions)).toBe(newer);
+		expect(orchestratorHealth(workspace)).toEqual({ state: "ok" });
+		expect(orchestratorHealth({ ...workspace, sessions: [dead] }).state).toBe("missing");
+	});
+
 	it("reports restart_needed when the configured orchestrator agent differs from the newest active orchestrator", () => {
 		const older = sessionWith({
 			id: "skills-1",

@@ -546,23 +546,24 @@ type Project struct {
 }
 
 type Report struct {
-	ID                 string
-	SessionID          string
-	ProjectID          string
-	State              string
-	Note               string
-	Message            string
-	CreatedAt          time.Time
-	DeliveryState      string
-	AvailableAt        time.Time
-	SettlementDeadline sql.NullTime
-	RepeatCount        int64
-	ClaimToken         string
-	ClaimedAt          sql.NullTime
-	DeliveryAttempts   int64
-	AcknowledgedAt     sql.NullTime
-	LastError          string
-	DeliveryBatchID    string
+	ID                    string
+	SessionID             string
+	ProjectID             string
+	State                 string
+	Note                  string
+	Message               string
+	CreatedAt             time.Time
+	DeliveryState         string
+	AvailableAt           time.Time
+	SettlementDeadline    sql.NullTime
+	RepeatCount           int64
+	ClaimToken            string
+	ClaimedAt             sql.NullTime
+	DeliveryAttempts      int64
+	AcknowledgedAt        sql.NullTime
+	LastError             string
+	DeliveryBatchID       string
+	OrchestratorSessionID string
 }
 
 type ReportOutput struct {
@@ -674,6 +675,8 @@ type Session struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	OrchestratorSessionID            string
+	ParallelOrchestrator             bool
 }
 
 type SessionCleanupFact struct {

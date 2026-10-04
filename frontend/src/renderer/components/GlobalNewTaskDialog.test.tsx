@@ -18,17 +18,19 @@ vi.mock("./NewTaskDialog", () => ({
 	NewTaskDialog: ({
 		open,
 		projectId,
+		orchestratorId,
 		onCreated,
 		onOpenChange,
 	}: {
 		open: boolean;
 		projectId?: string;
+		orchestratorId?: string;
 		onCreated: (id: string) => void;
 		onOpenChange: (open: boolean) => void;
 	}) => {
 		const [draft, setDraft] = useState("");
 		return open ? (
-			<div data-testid="new-task-dialog" data-project={projectId}>
+			<div data-testid="new-task-dialog" data-project={projectId} data-orchestrator={orchestratorId}>
 				<label>
 					task
 					<input aria-label="task" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} />
@@ -87,6 +89,12 @@ describe("GlobalNewTaskDialog", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-7", sessionId: "sess-9" },
 		});
+	});
+
+	it("keeps the selected orchestrator attached to the task request", async () => {
+		renderDialog();
+		act(() => useUiStore.getState().requestNewTask("proj-7", "orch-2"));
+		expect(await screen.findByTestId("new-task-dialog")).toHaveAttribute("data-orchestrator", "orch-2");
 	});
 
 	it("actually closes and re-opens for a fresh request to the same project", async () => {

@@ -54,6 +54,7 @@ type DelegateAgent = components["schemas"]["DelegateTaskRequest"]["agent"];
 
 type CreateTaskInput = {
 	projectId: string;
+	orchestratorId?: string;
 	brief: string;
 	agent?: DelegateAgent;
 	model?: string;
@@ -100,6 +101,7 @@ function hasErrorDetail(details: components["schemas"]["APIError"]["details"] | 
 
 export type TaskComposerProps = {
 	projectId?: string;
+	orchestratorId?: string;
 	onCreated: (sessionId: string) => void;
 	onDirtyChange?: (dirty: boolean) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
@@ -108,6 +110,7 @@ export type TaskComposerProps = {
 
 export function TaskComposer({
 	projectId,
+	orchestratorId,
 	onCreated,
 	onDirtyChange,
 	onSubmittingChange,
@@ -199,6 +202,7 @@ export function TaskComposer({
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: {
 						projectId: input.projectId,
+						...(input.orchestratorId ? { orchestratorId: input.orchestratorId } : {}),
 						brief: input.brief,
 						agent: input.agent,
 						...(input.model ? { model: input.model } : {}),
@@ -548,6 +552,7 @@ export function TaskComposer({
 			const submittedPreparation = taskPreparationRef.current;
 			const sessionId = await createTask({
 				projectId,
+				orchestratorId,
 				brief,
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 				model: requestedModel,

@@ -11,6 +11,7 @@ const actions: ProjectOrchestratorAction = {
 	isProvisioning: false,
 	spawnError: "",
 	canCreateAsTui: false,
+	createOrchestrator: vi.fn(),
 	openNewTask: vi.fn(),
 	openOrchestrator: vi.fn(),
 };

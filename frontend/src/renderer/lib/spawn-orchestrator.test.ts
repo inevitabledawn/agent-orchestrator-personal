@@ -65,6 +65,17 @@ describe("spawnOrchestrator", () => {
 		});
 	});
 
+	it("requests a parallel Chat session without replacing the active orchestrator", async () => {
+		(apiClient.POST as ReturnType<typeof vi.fn>).mockResolvedValue({
+			data: { orchestrator: { id: "proj-10" } }, error: undefined, response: { status: 201 },
+		});
+		const id = await spawnOrchestrator("proj", "session_tab", false, "chat", undefined, true);
+		expect(id).toBe("proj-10");
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/orchestrators", {
+			body: { projectId: "proj", clean: false, mode: "chat", parallel: true },
+		});
+	});
+
 	it("defaults clean to false / omitted for the existing call sites", async () => {
 		(apiClient.POST as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { orchestrator: { id: "proj-1" } },
