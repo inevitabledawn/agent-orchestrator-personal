@@ -25,4 +25,6 @@ Preserve dirty source trees, installed app, production AO data, and original pub
 - [x] Implement `fork/stack.py` with status, exact verification, isolated replay/export, conflict finalization, and dependency-aware contribution preparation.
 - [x] Add real-Git regression tests for replay, checksums, migration collisions, runtime drift, existing destinations, and conflict preservation.
 - [x] Document branch ownership, migration handling, update/contribution workflows, and implemented features at the end of README.
-- [ ] Run full relevant source checks, exact source/patch preservation, and independent final review; publish the new branch without rewriting previous branches.
+- [x] Run full relevant source checks, exact source/patch preservation, and independent final review.
+
+Publish the verified maintained branch without rewriting previous branches; select it as the fork default only after push and remote commit verification.

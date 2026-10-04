@@ -1,0 +1,2 @@
+# Patch context prefixes intentionally precede source tabs/blank lines.
+patches/*.patch -whitespace
