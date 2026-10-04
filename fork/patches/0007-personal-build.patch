@@ -1,0 +1,42 @@
+From 694399f1a21fc5b91751ffb312052535f9dda5a1 Mon Sep 17 00:00:00 2001
+From: arkyira <hi@simulacr.me>
+Date: Sun, 4 Oct 2026 23:14:26 +0300
+Subject: [PATCH] build: label personal desktop revision
+
+---
+ frontend/package-lock.json | 4 ++--
+ frontend/package.json      | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index c1f9ea0b09d5bd3f1619222f5730bd5de23d0e50..e1cf044634cbe981b40b6690fbbe40ec58a962fb 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+ 	"name": "agent-orchestrator",
+-	"version": "0.13.0",
++	"version": "0.13.3-personal.1",
+ 	"lockfileVersion": 3,
+ 	"requires": true,
+ 	"packages": {
+ 		"": {
+ 			"name": "agent-orchestrator",
+-			"version": "0.13.0",
++			"version": "0.13.3-personal.1",
+ 			"license": "MIT",
+ 			"dependencies": {
+ 				"@aoagents/product-ui": "file:../packages/product-ui",
+diff --git a/frontend/package.json b/frontend/package.json
+index e819f91fccfb5d5c00e43fd550941ff7d958c7fc..fd6d2fe8c011fe399dc5926f867aea52be0cd1a4 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -1,7 +1,7 @@
+ {
+ 	"name": "agent-orchestrator",
+ 	"productName": "Agent Orchestrator",
+-	"version": "0.13.0",
++	"version": "0.13.3-personal.1",
+ 	"private": true,
+ 	"description": "Electron + TypeScript frontend for the agent-orchestrator rewrite",
+ 	"author": "Agent Orchestrator",

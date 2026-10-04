@@ -1,0 +1,255 @@
+From c36119b5906e4c98e33ff6981a38a557bc91af15 Mon Sep 17 00:00:00 2001
+From: arkyira <hi@simulacr.me>
+Date: Sun, 4 Oct 2026 23:14:26 +0300
+Subject: [PATCH] test(agents): add opt-in installed CLI compatibility checks
+
+---
+ .../internal/adapters/agent/agy/agy_test.go   | 32 +++++++++
+ .../chatdriver/opencodeacp/installed_test.go  | 70 +++++++++++++++++++
+ backend/internal/cli/agent_process_test.go    | 36 ++++++++++
+ docs/cli/compatibility-checks.md              | 41 +++++++++++
+ test/check-local-cli-compatibility.sh         | 16 +++++
+ 5 files changed, 195 insertions(+)
+ create mode 100644 backend/internal/adapters/chatdriver/opencodeacp/installed_test.go
+ create mode 100644 backend/internal/cli/agent_process_test.go
+ create mode 100644 docs/cli/compatibility-checks.md
+ create mode 100755 test/check-local-cli-compatibility.sh
+
+diff --git a/backend/internal/adapters/agent/agy/agy_test.go b/backend/internal/adapters/agent/agy/agy_test.go
+index 4af8d14bfd6505d2f88ff684afda830e40cf6ab3..6329a927e8c4d6eb77a4eb45b8686877b98389e4 100644
+--- a/backend/internal/adapters/agent/agy/agy_test.go
++++ b/backend/internal/adapters/agent/agy/agy_test.go
+@@ -4,10 +4,12 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"os"
++	"os/exec"
+ 	"path/filepath"
+ 	"reflect"
+ 	"strings"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+ )
+@@ -368,3 +370,33 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
+ 		t.Fatalf("config fields\nwant: %#v\n got: %#v", want, spec.Fields)
+ 	}
+ }
++
++func TestInstalledAgyLaunchFlags(t *testing.T) {
++	if os.Getenv("AO_AGENT_CLI_COMPAT") != "1" {
++		t.Skip("set AO_AGENT_CLI_COMPAT=1 for installed CLI checks")
++	}
++	bin, err := exec.LookPath("agy")
++	if err != nil {
++		t.Fatal("agy is required for this compatibility check")
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	help, err := exec.CommandContext(ctx, bin, "--help").CombinedOutput()
++	if err != nil {
++		t.Fatalf("installed agy help: %v", err)
++	}
++	plugin := &Plugin{resolvedBinary: bin}
++	launch, err := plugin.GetLaunchCommand(ctx, ports.LaunchConfig{Permissions: ports.PermissionModeBypassPermissions, Prompt: "compatibility check", WorkspacePath: t.TempDir(), Config: ports.AgentConfig{Model: "test-model"}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	restore, ok, err := plugin.GetRestoreCommand(ctx, ports.RestoreConfig{Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "test-model"}, Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "test-conversation"}, WorkspacePath: t.TempDir()}})
++	if err != nil || !ok {
++		t.Fatalf("restore command: ok=%v err=%v", ok, err)
++	}
++	for _, arg := range append(launch, restore...) {
++		if strings.HasPrefix(arg, "--") && !strings.Contains(string(help), arg) {
++			t.Errorf("installed agy no longer advertises required flag %s", arg)
++		}
++	}
++}
+diff --git a/backend/internal/adapters/chatdriver/opencodeacp/installed_test.go b/backend/internal/adapters/chatdriver/opencodeacp/installed_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..e15e2bc044dcf83577cfb67bbea71bbc924d6593
+--- /dev/null
++++ b/backend/internal/adapters/chatdriver/opencodeacp/installed_test.go
+@@ -0,0 +1,70 @@
++package opencodeacp
++
++import (
++	"context"
++	"encoding/json"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++// Initialize only: no session/new, auth request, or prompt is sent. Provider
++// configuration and writes are confined to scratch XDG directories.
++func TestInstalledOpenCodeACPInitialize(t *testing.T) {
++	if os.Getenv("AO_AGENT_CLI_COMPAT") != "1" {
++		t.Skip("set AO_AGENT_CLI_COMPAT=1 for installed CLI checks")
++	}
++	bin, err := exec.LookPath("opencode")
++	if err != nil {
++		t.Fatal("opencode is required for this compatibility check")
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
++	defer cancel()
++	scratch := t.TempDir()
++	cmd := exec.CommandContext(ctx, bin, "acp")
++	cmd.Dir = scratch
++	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+filepath.Join(scratch, "config"), "XDG_DATA_HOME="+filepath.Join(scratch, "data"), "XDG_CACHE_HOME="+filepath.Join(scratch, "cache"), "XDG_STATE_HOME="+filepath.Join(scratch, "state"), `OPENCODE_CONFIG_CONTENT={"plugin":[],"mcp":{}}`)
++	stdin, err := cmd.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	stdout, err := cmd.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = stdin.Close(); _ = cmd.Process.Kill(); _ = cmd.Wait() }()
++	request := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": 1, "clientInfo": map[string]string{"name": "ao-compatibility-check", "version": "1"}, "clientCapabilities": map[string]any{}}}
++	if err := json.NewEncoder(stdin).Encode(request); err != nil {
++		t.Fatal(err)
++	}
++	decoder := json.NewDecoder(stdout)
++	for {
++		var reply struct {
++			ID     *int `json:"id"`
++			Result struct {
++				ProtocolVersion int `json:"protocolVersion"`
++			} `json:"result"`
++			Error *struct {
++				Code int `json:"code"`
++			} `json:"error"`
++		}
++		if err := decoder.Decode(&reply); err != nil {
++			t.Fatalf("installed OpenCode ACP initialize did not return a valid response: %v", err)
++		}
++		if reply.ID == nil || *reply.ID != 1 {
++			continue
++		}
++		if reply.Error != nil {
++			t.Fatalf("installed OpenCode refused ACP initialize (code %d)", reply.Error.Code)
++		}
++		if reply.Result.ProtocolVersion != 1 {
++			t.Fatalf("unsupported ACP version %d", reply.Result.ProtocolVersion)
++		}
++		break
++	}
++}
+diff --git a/backend/internal/cli/agent_process_test.go b/backend/internal/cli/agent_process_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..5a5a9a64ed0995b96e0dc1692aa36198230f695a
+--- /dev/null
++++ b/backend/internal/cli/agent_process_test.go
+@@ -0,0 +1,36 @@
++package cli
++
++import (
++	"net/http"
++	"strings"
++	"testing"
++)
++
++func TestAgentProcessSupervisesDottedProjectSession(t *testing.T) {
++	cfg := setConfigEnv(t)
++	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
++	writeRunFileFor(t, cfg, srv)
++	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "agent-process", "supervise", "--session", "agent-orchestrator-personal-v0.13.1-1", "--launch", "launch-1", "--", "printf", "agent-started")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(out, "agent-started") {
++		t.Fatalf("agent not started: %q", out)
++	}
++	if capture.path != "/api/v1/sessions/agent-orchestrator-personal-v0.13.1-1/activity" {
++		t.Fatalf("exit report path = %q", capture.path)
++	}
++}
++
++func TestSessionIDPathValidation(t *testing.T) {
++	for _, id := range []string{"qa-1", "v0.13.1-1", "proj_name-1"} {
++		if !sessionIDPattern.MatchString(id) {
++			t.Errorf("valid session rejected: %q", id)
++		}
++	}
++	for _, id := range []string{"", ".", "..", "a..b", ".hidden", "a/../b", "a?x=y", "a#b", "a%2fb", "a\\b", "a b"} {
++		if sessionIDPattern.MatchString(id) {
++			t.Errorf("unsafe session accepted: %q", id)
++		}
++	}
++}
+diff --git a/docs/cli/compatibility-checks.md b/docs/cli/compatibility-checks.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a2016e6ca92ae97e545d786d32b85a053539bdd3
+--- /dev/null
++++ b/docs/cli/compatibility-checks.md
+@@ -0,0 +1,41 @@
++# Local CLI compatibility checks
++
++Run `bash test/check-local-cli-compatibility.sh` after updating Codex, Antigravity
++CLI, or OpenCode. It requires all three CLIs on PATH and checks:
++
++- Codex's installed protocol schema, initialize handshake, and model inventory.
++- OpenCode's ACP initialize response with scratch XDG configuration/data/cache.
++- Antigravity's advertised flags against AO's actual launch and restore commands.
++
++These checks send no model prompts and create no AO sessions. They fail on a
++missing binary, rejected/malformed handshake, missing launch flag, schema-export
++failure, or removed required protocol method. Each provider subprocess has a deadline.
++The ordinary backend suite also checks mocked transport errors, history editing,
++unknown provider messages, resume, permissions, and generated protocol types.
++
++The 2026-10-01 check passed against Codex 0.159.2, agy 1.2.14, and OpenCode 1.18.33.
++This is a compatibility snapshot, not a guarantee for future provider versions.
++Antigravity hook execution/authentication and paid model turns are outside this
++read-only check. OpenCode initialize alone does not verify login or model access.
++
++If Codex's protocol changed, regenerate its bindings with
++`cd backend && go run ./cmd/gencodexproto`, inspect the diff, and rerun the Codex
++adapter suite. Regeneration alone is not evidence that new behavior is supported.
++
++One stress-test limitation was observed during validation: ACP SDK 0.13.5 has a
++1024-notification queue, and `TestACPReplayLoadLargeHistoryThroughSDK` overflowed
++it once while the backend and frontend full suites ran concurrently. Five
++isolated repeats and the subsequent full backend suite passed. This is an
++unresolved intermittent stress-test risk; no transport behavior was changed
++without a reproducible production failure.
++
++Review also confirmed an existing upstream limitation at `ec1c6122a`: sending a
++user-authored message during a Chat/TUI interface transition queues its text and
++client ID without the authorship flag, then drains it as an internal message.
++This predates the personal integration and was not changed here. Correct repair
++requires durable authorship and user-turn retry identity in the transition
++outbox; it is separate from installed CLI protocol compatibility.
++
++Codex now discovers capabilities from the installed schema at runtime. See
++[codex-protocol-compatibility.md](codex-protocol-compatibility.md) for update,
++cache, persistent-session, and semantic compatibility boundaries.
+diff --git a/test/check-local-cli-compatibility.sh b/test/check-local-cli-compatibility.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..458abbbd8a4c6b911febbd95183cd690001fccc1
+--- /dev/null
++++ b/test/check-local-cli-compatibility.sh
+@@ -0,0 +1,16 @@
++#!/usr/bin/env bash
++# Read-only protocol/flag checks against installed CLIs. No agent prompts.
++set -euo pipefail
++repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++for cli in codex agy opencode; do
++  if ! command -v "$cli" >/dev/null 2>&1; then
++    echo "Required CLI is unavailable: $cli" >&2
++    exit 1
++  fi
++done
++cd "$repo_root/backend"
++AO_AGENT_CLI_COMPAT=1 go test -timeout 90s \
++  ./internal/adapters/chatdriver/codexappserver \
++  ./internal/adapters/chatdriver/opencodeacp \
++  ./internal/adapters/agent/agy \
++  -run 'TestInstalled|TestGeneratedProtocolMatchesTheInstalledProvider' -count=1 -v

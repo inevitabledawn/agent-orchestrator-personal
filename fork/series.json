@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "upstream": "https://github.com/Untrivial-ai/agent-orchestrator.git",
+  "base": "99d4035e992c84da0c1aadf5c76c5f6710e9221a",
+  "source_head": "694399f1a21fc5b91751ffb312052535f9dda5a1",
+  "patches": [
+    {
+      "id": "codex-protocol",
+      "subject": "fix(codex): discover protocol capabilities and preserve native history",
+      "category": "upstream-candidate",
+      "checks": [
+        "cd backend && go test ./cmd/gencodexproto ./internal/adapters/chatdriver/codexappserver ./internal/adapters/chatdriver/persistenthost"
+      ],
+      "commit": "943d5feac66ab20568df15c7c53da016545ee978",
+      "file": "0001-codex-protocol.patch",
+      "sha256": "a29983180684c58f49f44e59a3cc8bd28cf04133c2dea34238f2e3cd728f503e",
+      "added_migrations": [],
+      "depends_on": []
+    },
+    {
+      "id": "codex-report-delivery",
+      "subject": "fix(report): reconcile Codex acceptance and guard retry delivery",
+      "category": "upstream-candidate",
+      "checks": [
+        "cd backend && go test ./internal/adapters/agent/codex ./internal/adapters/agent/terminalui ./internal/adapters/runtime/... ./internal/sessionguard ./internal/service/report ./internal/session_manager ./internal/daemon"
+      ],
+      "commit": "5f7c811f69a990c436ce1da5cd203a0c28934c0e",
+      "file": "0002-codex-report-delivery.patch",
+      "sha256": "b996a6ac077a5c98ef5819d904877a3baa982ab11f574771624ead8943e67e5d",
+      "added_migrations": [],
+      "depends_on": []
+    },
+    {
+      "id": "parallel-orchestrators",
+      "subject": "feat(orchestrator): add independent sessions and durable worker ownership",
+      "category": "upstream-candidate",
+      "checks": [
+        "cd backend && go test ./internal/service/... ./internal/session_manager ./internal/storage/sqlite/... ./internal/httpd/... ./internal/cli",
+        "cd frontend && npm run typecheck && npm test && npx playwright test e2e/orchestrator-session-tabs.spec.ts"
+      ],
+      "commit": "0b3ac1152af48d8ac10421630a15973c95dc0aa0",
+      "file": "0003-parallel-orchestrators.patch",
+      "sha256": "51cfea90008927519e1b8d97d029ca413d28e8f3164fea17cdf34f024760b534",
+      "added_migrations": [
+        "backend/internal/storage/sqlite/migrations/0171_parallel_orchestrator_ownership.sql"
+      ],
+      "depends_on": [
+        "codex-report-delivery"
+      ]
+    },
+    {
+      "id": "legacy-ownership-migration",
+      "subject": "fix(sqlite): preserve legacy personal ownership migration history",
+      "category": "personal-only",
+      "checks": [
+        "cd backend && go test ./internal/storage/sqlite/..."
+      ],
+      "commit": "abfb7cb1adaf4377e15dcc9148ff8a986c0831c1",
+      "file": "0004-legacy-ownership-migration.patch",
+      "sha256": "6be0c6685f4fc3994825b3729cd25cfb7fa91899cc22395a8ff4506c0194462b",
+      "added_migrations": [],
+      "depends_on": [
+        "parallel-orchestrators"
+      ]
+    },
+    {
+      "id": "worker-defaults",
+      "subject": "fix(orchestrator): honor current project worker defaults",
+      "category": "upstream-candidate",
+      "checks": [
+        "cd backend && go test ./internal/session_manager",
+        "cd frontend && npm test -- src/renderer/components/TaskComposer.test.tsx"
+      ],
+      "commit": "90909dfa238436493cff5bdce422e1d99d3a93a9",
+      "file": "0005-worker-defaults.patch",
+      "sha256": "c1609b41abd7294e88e1b67b797f6c538da4b5247170caee45fe67120c41fe79",
+      "added_migrations": [],
+      "depends_on": [
+        "parallel-orchestrators"
+      ]
+    },
+    {
+      "id": "installed-cli-checks",
+      "subject": "test(agents): add opt-in installed CLI compatibility checks",
+      "category": "upstream-candidate",
+      "checks": [
+        "bash test/check-local-cli-compatibility.sh"
+      ],
+      "commit": "c36119b5906e4c98e33ff6981a38a557bc91af15",
+      "file": "0006-installed-cli-checks.patch",
+      "sha256": "8252ab1680695237bfc7ae6c38523be086af7fdcbd84aae38db6b2e468e43b9f",
+      "added_migrations": [],
+      "depends_on": [
+        "parallel-orchestrators",
+        "codex-protocol"
+      ]
+    },
+    {
+      "id": "personal-build",
+      "subject": "build: label personal desktop revision",
+      "category": "personal-only",
+      "checks": [
+        "cd frontend && npm ci"
+      ],
+      "commit": "694399f1a21fc5b91751ffb312052535f9dda5a1",
+      "file": "0007-personal-build.patch",
+      "sha256": "752f1a0d8aba89199581035d31a09e5797d79207de5ebc0b7b07b1d1da8c0c02",
+      "added_migrations": [],
+      "depends_on": []
+    }
+  ]
+}

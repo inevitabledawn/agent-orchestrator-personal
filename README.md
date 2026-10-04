@@ -256,3 +256,43 @@ AO leaves PostHog's IP-based location derivation enabled, so coarse geography (c
 ## License
 
 Agent Orchestrator is available under the [Apache License 2.0](LICENSE).
+
+## Personal fork features
+
+This public fork preserves the upstream application and adds the following
+Personal implementations. Use the fork's default branch for maintained source;
+[patch inventory and update/contribution workflow](fork/README.md) document the
+pinned upstream base and the boundary of each change.
+
+- **Independent project orchestrators:** multiple coordinator sessions with
+  separate worktrees, conversations, and session tabs; selection persists across
+  navigation, closed tabs can be reopened through direct session navigation,
+  and creating a new session does not replace another parallel coordinator.
+- **Durable worker and report ownership:** workers retain their orchestrator
+  owner through persistence, restore, and Chat/TUI handoff; messages, worker
+  listings, and completion reports route to that coordinator. Legacy single
+  project-coordinator behavior remains supported.
+- **Reliable Codex terminal report delivery:** reconcile acceptance against native
+  conversation history, recognize partially visible report drafts, recheck the
+  composer before pasting, and guard retry/rescue submission against duplicate
+  input and runtime-generation changes.
+- **Codex Chat protocol compatibility:** discover the installed provider's
+  capabilities, gate optional APIs, bind protocol snapshots to persistent host
+  instances, read paginated conversation history, and revert before a selected
+  turn without discarding provider items the adapter does not recognize.
+- **Current Worker settings:** project Worker agent/model/mode/effort settings
+  take precedence over stale composer selections, and orchestrator prompts
+  explain configured Worker defaults for ordinary delegation.
+- **Coordinator navigation and controls:** dedicated orchestrator menu/session
+  tabs, retained project selection, and board health recognition of live
+  parallel coordinators.
+- **Opt-in installed CLI compatibility checks:** read-only schema/handshake and
+  launch-flag checks for Codex, OpenCode, and Antigravity; no model prompts.
+- **Personal upgrade compatibility:** preserve ownership data from the old
+  Personal SQLite migration and label Personal desktop builds separately.
+  These fork-specific patches are excluded from contribution candidates.
+
+These features are implemented in this fork; they have not been submitted or
+accepted upstream. The patch tool prepares contribution branches with explicit
+dependencies and verifies source reproducibility. Desktop installation and
+future upstream integration remain separate, verified steps.

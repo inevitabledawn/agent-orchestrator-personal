@@ -1,0 +1,159 @@
+From 90909dfa238436493cff5bdce422e1d99d3a93a9 Mon Sep 17 00:00:00 2001
+From: arkyira <hi@simulacr.me>
+Date: Sun, 4 Oct 2026 23:14:26 +0300
+Subject: [PATCH] fix(orchestrator): honor current project worker defaults
+
+---
+ backend/internal/session_manager/manager.go   |  6 ++++++
+ .../internal/session_manager/manager_test.go  | 18 ++++++++++++++++
+ backend/internal/session_manager/prompt.go    |  7 +++++--
+ .../renderer/components/TaskComposer.test.tsx | 21 +++++++++++++++++++
+ .../src/renderer/components/TaskComposer.tsx  | 14 ++++++-------
+ 5 files changed, 57 insertions(+), 9 deletions(-)
+
+diff --git a/backend/internal/session_manager/manager.go b/backend/internal/session_manager/manager.go
+index 54905abc1adfd22d0b385dd38721309299924821..5f8ebb5a056057167c15dab74cdb2fb5a760c5ba 100644
+--- a/backend/internal/session_manager/manager.go
++++ b/backend/internal/session_manager/manager.go
+@@ -5119,6 +5119,12 @@ func (m *Manager) buildSystemPromptForOwner(ctx context.Context, kind domain.Ses
+ 	switch kind {
+ 	case domain.KindOrchestrator:
+ 		cfg.OrchestratorRules = project.Config.OrchestratorRules
++		worker := project.Config.Worker
++		workerConfig := effectiveAgentConfig(worker.Harness, domain.KindWorker, project.Config)
++		cfg.AdditionalSections = append(cfg.AdditionalSections, fmt.Sprintf(
++			"## Configured Worker Defaults\n\nWorker agent: %q. Worker model: %q. Worker effort: %q.\nThese are the project settings at session start, not your own orchestrator settings. Omit --agent and --model on ordinary worker spawns to use the latest settings; an empty model lets the worker agent choose its default.",
++			worker.Harness, workerConfig.Model, workerConfig.Effort,
++		))
+ 	case domain.KindWorker:
+ 		if projectID != "" {
+ 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
+diff --git a/backend/internal/session_manager/manager_test.go b/backend/internal/session_manager/manager_test.go
+index 4a465f39b598e5914bd123b0ee0354f7cf885322..9022ffecbd2d1d5781a375bacd6ce3dd1abe2903 100644
+--- a/backend/internal/session_manager/manager_test.go
++++ b/backend/internal/session_manager/manager_test.go
+@@ -5512,6 +5512,24 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
+ 	}
+ }
+ 
++func TestOrchestratorPromptUsesProjectWorkerDefaults(t *testing.T) {
++	cfg := testRoleAgents()
++	cfg.Worker.Harness = "agy"
++	cfg.Worker.AgentConfig.Model = "gemini-3.8-flash-high"
++	st := newFakeStore()
++	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: cfg}
++	m := New(Deps{Store: st})
++	prompt, err := m.buildSystemPrompt(context.Background(), domain.KindOrchestrator, "mer")
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, want := range []string{`Worker agent: "agy"`, `Worker model: "gemini-3.8-flash-high"`, "Omit --agent and --model", "ao project get mer --json", "## In-App Session Links"} {
++		if !strings.Contains(prompt, want) {
++			t.Fatalf("missing worker routing guidance %q", want)
++		}
++	}
++}
++
+ func TestSpawnOrchestrator_ProjectRulesInSystemPrompt(t *testing.T) {
+ 	cfg := testRoleAgents()
+ 	cfg.AgentRules = "Worker-only rule."
+diff --git a/backend/internal/session_manager/prompt.go b/backend/internal/session_manager/prompt.go
+index dbf1992fc575ff3c96dba647b2a898e727f1c5d0..78068b40962506ac6ff0663b991eecae185516f9 100644
+--- a/backend/internal/session_manager/prompt.go
++++ b/backend/internal/session_manager/prompt.go
+@@ -221,7 +221,10 @@ Your job is to coordinate work, not to perform implementation. Keep the project
+ - `+"`ao spawn --project %s --name \"<label>\" --issue <issue-id>`"+` - spawn a worker for an issue.
+ - `+"`--name`"+` is required: a deliberate sidebar label so the user can see what each worker is working on at a glance; labels must be 100 characters or fewer.
+ - Before running `+"`ao spawn`"+`, count the `+"`--name`"+` label yourself. It must be 100 characters or fewer. If your first label is longer, shorten it before executing the command.
+-- Add `+"`--agent <name>`"+` when a worker must use a specific agent.
++- Worker agent and model selection is controlled by the project's Worker settings, independently of your own orchestrator agent/model and any general model-routing guidance.
++- Normally omit `+"`--agent`"+` and `+"`--model`"+` from worker spawns so AO resolves the current Worker settings at launch time. Do not choose a replacement based on your own agent, preferred model, or generic routing instructions.
++- Read `+"`ao project get %s --json`"+` before spawning if you need to verify the current Worker settings; they may have changed since this session started.
++- Add `+"`--agent <name>`"+` only when the human explicitly requests an agent override for this task.
+ - Add `+"`--model <id>`"+` when the human or task explicitly requests a specific model.
+ - Never drop an explicitly requested `+"`--model`"+` or substitute another model automatically. If `+"`ao spawn --model ...`"+` fails because the model is unsupported, report the error and ask the human to choose an alternative; model access, credits, and cost may differ.
+ - `+"`ao send --session <session-id> --message \"<message>\"`"+` - message a worker.
+@@ -251,7 +254,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project
+ - If review changes are requested, send the review findings to the responsible worker.
+ - If work is green and approved, report that state to the human. Do not merge unless explicitly asked and supported by project rules.
+ 
+-%s`, projectName(project), project.ID, project.ID, project.ID, projectContextSection(project))
++%s`, projectName(project), project.ID, project.ID, project.ID, project.ID, projectContextSection(project))
+ }
+ 
+ func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {
+diff --git a/frontend/src/renderer/components/TaskComposer.test.tsx b/frontend/src/renderer/components/TaskComposer.test.tsx
+index 488b742e2440302ba7fff4e820204ddb9baa790d..268b42794fa5ba27a76eddf3673fb146a2020c46 100644
+--- a/frontend/src/renderer/components/TaskComposer.test.tsx
++++ b/frontend/src/renderer/components/TaskComposer.test.tsx
+@@ -145,6 +145,27 @@ afterEach(() => {
+ });
+ 
+ describe("TaskComposer", () => {
++	it.each([
++		{ agent: "agy", model: "gemini-3.8-flash-high", effort: "" },
++		{ agent: "codex", model: "gpt-6.1-sol", effort: "medium" },
++	])("uses current worker settings over saved selections for $agent", async ({ agent, model, effort }) => {
++		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ "project-a": { lastAgent: "codex", agents: { codex: { model: "gpt-6-sol", mode: "", effort: "low" } } } }));
++		h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("agy", "Agy")] };
++		h.get.mockImplementation(async (path: string) => path.includes("/models")
++			? { data: { agent, selectionMode: "text", models: [], allowCustom: true, refreshRecommended: false } }
++			: { data: { status: "ok", project: { agent: "codex", config: { worker: { agent, agentConfig: { model, effort } } } } } });
++		h.post.mockResolvedValue({ data: { workerId: "worker-current-settings" } });
++		render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} /></Wrap>);
++		await waitForTaskReady();
++		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", agent));
++		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent(model);
++		fireEvent.change(task(), { target: { value: "Use the configured worker" } });
++		fireEvent.click(startTask());
++		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ agent }) })));
++		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
++		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
++	});
++
+ 	it("sends the selected orchestrator when creating a local worker", async () => {
+ 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+ 		h.post.mockResolvedValue({ data: { workerId: "worker-1" } });
+diff --git a/frontend/src/renderer/components/TaskComposer.tsx b/frontend/src/renderer/components/TaskComposer.tsx
+index adc854755981009375f219eea9b06ff076deb47f..582d3de52686f6432a97d5488cd54be2bb0dd195 100644
+--- a/frontend/src/renderer/components/TaskComposer.tsx
++++ b/frontend/src/renderer/components/TaskComposer.tsx
+@@ -360,7 +360,7 @@ export function TaskComposer({
+ 	const rememberedAgentIsAvailable = Boolean(
+ 		availableAgents?.some((candidate) => candidate.id === rememberedAgent && isReadyAgent(candidate)),
+ 	);
+-	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
++	const defaultWorkerAgent = projectWorkerAgent || (rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent);
+ 	const selectedAgent = agent || defaultWorkerAgent;
+ 	// A cloud project is unknown to the local daemon, so its model catalog is
+ 	// queried agent-level (no project scope); otherwise the request 404s and the
+@@ -449,12 +449,12 @@ export function TaskComposer({
+ 	const rememberedModeIsValid =
+ 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
+ 	const defaultModelForSelectedAgent =
+-		(rememberedModelIsValid ? rememberedModel : "") ||
+ 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
++		(rememberedModelIsValid ? rememberedModel : "") ||
+ 		(catalogUsesModes ? "" : catalogDefaultOption);
+ 	const defaultModeForSelectedAgent =
+-		(rememberedModeIsValid ? rememberedMode : "") ||
+ 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
++		(rememberedModeIsValid ? rememberedMode : "") ||
+ 		(catalogUsesModes ? catalogDefaultOption : "");
+ 	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
+ 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
+@@ -467,10 +467,10 @@ export function TaskComposer({
+ 		rememberedConfigForSelectedAgent &&
+ 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
+ 	);
+-	const defaultEffortForSelectedAgent = rememberedEffortIsExplicit
+-		? (rememberedConfigForSelectedAgent?.effort ?? "")
+-		: selectedAgent === configuredProjectAgent
+-			? defaultWorkerEffort
++	const defaultEffortForSelectedAgent = selectedAgent === configuredProjectAgent && defaultWorkerEffort
++		? defaultWorkerEffort
++		: rememberedEffortIsExplicit
++			? (rememberedConfigForSelectedAgent?.effort ?? "")
+ 			: "";
+ 	const { selected: effortModel } = useModelTuning({
+ 		models: catalogModels,
