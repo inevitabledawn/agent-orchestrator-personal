@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputsettle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -798,6 +799,10 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	}
 	enterCtx := ctx
 	if message != "" {
+		settleDelay := r.enterDelay
+		if settleDelay == defaultEnterDelay {
+			settleDelay = inputsettle.Delay(message)
+		}
 		messageChunks := chunks(message, r.chunkSize)
 		sendCtx := ctx
 		var finishCancel context.CancelFunc
@@ -809,7 +814,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 				return fmt.Errorf("tmux runtime: send message %s: %w", id, err)
 			}
 			if i == 0 {
-				completionBudget := sendCompletionBudget(len(messageChunks), r.timeout, r.enterDelay)
+				completionBudget := sendCompletionBudget(len(messageChunks), r.timeout, settleDelay)
 				enterCtx, finishCancel = context.WithTimeout(context.WithoutCancel(ctx), completionBudget)
 				sendCtx = enterCtx
 			}
@@ -830,11 +835,11 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 		// Errors reported by tmux after it accepts a chunk still return to the
 		// caller; they are not retried because AO cannot safely distinguish
 		// whether tmux applied the failed command.
-		if r.enterDelay > 0 {
+		if settleDelay > 0 {
 			select {
 			case <-enterCtx.Done():
 				return enterCtx.Err()
-			case <-time.After(r.enterDelay):
+			case <-time.After(settleDelay):
 			}
 		}
 	}

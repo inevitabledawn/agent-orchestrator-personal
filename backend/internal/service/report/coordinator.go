@@ -36,7 +36,7 @@ type DeliveryStore interface {
 
 // Delivery submits accepted semantic context and interrupts active work.
 type Delivery interface {
-	Submit(context.Context, domain.SessionID, string, string) error
+	Submit(context.Context, domain.SessionID, string, string, int64) error
 	Interrupt(context.Context, domain.SessionID) error
 }
 
@@ -177,7 +177,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			return deferErr
 		}
 	}
-	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
+	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey(), batch.Reports[0].DeliveryAttempts); err != nil {
 		return c.release(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())

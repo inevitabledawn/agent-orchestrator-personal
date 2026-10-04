@@ -110,9 +110,50 @@ type Guard struct {
 
 	leaseMu sync.RWMutex
 	lease   InputLease
+	writeMu sync.Mutex
+	writes  map[domain.SessionID]*sessionWrite
 
 	startupGateMu           sync.RWMutex
 	startupSignalGatesInput func(domain.AgentHarness) bool
+}
+
+type sessionWrite struct {
+	token chan struct{}
+	refs  int
+}
+
+func (g *Guard) acquireWrite(ctx context.Context, id domain.SessionID) (func(), error) {
+	g.writeMu.Lock()
+	if g.writes == nil {
+		g.writes = make(map[domain.SessionID]*sessionWrite)
+	}
+	entry := g.writes[id]
+	if entry == nil {
+		entry = &sessionWrite{token: make(chan struct{}, 1)}
+		entry.token <- struct{}{}
+		g.writes[id] = entry
+	}
+	entry.refs++
+	g.writeMu.Unlock()
+	select {
+	case <-ctx.Done():
+		g.releaseWrite(id, entry)
+		return nil, ctx.Err()
+	case <-entry.token:
+		return func() {
+			entry.token <- struct{}{}
+			g.releaseWrite(id, entry)
+		}, nil
+	}
+}
+
+func (g *Guard) releaseWrite(id domain.SessionID, entry *sessionWrite) {
+	g.writeMu.Lock()
+	entry.refs--
+	if entry.refs == 0 {
+		delete(g.writes, id)
+	}
+	g.writeMu.Unlock()
 }
 
 var _ ports.AgentMessenger = (*Guard)(nil)
@@ -203,6 +244,12 @@ func (g *Guard) Deliver(ctx context.Context, id domain.SessionID, msg string) (O
 // close admission and snapshot handoff context.
 func (g *Guard) DeliverWithPostWrite(ctx context.Context, id domain.SessionID, msg string, after func(context.Context) error) (Outcome, error) {
 	return g.sendThen(ctx, id, msg, g.refuseDeliver, after)
+}
+
+// DeliverChecked repeats caller-owned evidence checks under the input lease,
+// immediately before writing. It is used for Enter-only Codex report rescue.
+func (g *Guard) DeliverChecked(ctx context.Context, id domain.SessionID, msg string, preWrite func(context.Context, domain.SessionRecord) error) (Outcome, error) {
+	return g.sendThenChecked(ctx, id, msg, g.refuseDeliver, preWrite, nil)
 }
 
 // DeliverUnderMutation applies the same just-in-time session safety checks as
@@ -362,6 +409,10 @@ func (g *Guard) send(ctx context.Context, id domain.SessionID, msg string, refus
 }
 
 func (g *Guard) sendThen(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), after func(context.Context) error) (Outcome, error) {
+	return g.sendThenChecked(ctx, id, msg, refuse, nil, after)
+}
+
+func (g *Guard) sendThenChecked(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), preWrite func(context.Context, domain.SessionRecord) error, after func(context.Context) error) (Outcome, error) {
 	g.leaseMu.RLock()
 	lease := g.lease
 	g.leaseMu.RUnlock()
@@ -373,7 +424,7 @@ func (g *Guard) sendThen(ctx context.Context, id domain.SessionID, msg string, r
 		}
 		defer release()
 	}
-	outcome, err := g.sendAdmitted(ctx, id, msg, refuse)
+	outcome, err := g.sendAdmittedChecked(ctx, id, msg, refuse, preWrite)
 	if err == nil && outcome == Sent && after != nil {
 		if afterErr := after(ctx); afterErr != nil {
 			return outcome, afterErr
@@ -389,6 +440,11 @@ func (g *Guard) sendAdmitted(ctx context.Context, id domain.SessionID, msg strin
 }
 
 func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), preWrite func(context.Context, domain.SessionRecord) error) (Outcome, error) {
+	release, lockErr := g.acquireWrite(ctx, id)
+	if lockErr != nil {
+		return SuppressedUnknown, lockErr
+	}
+	defer release()
 	rec, ok, err := g.store.GetSession(ctx, id)
 	if err != nil {
 		return SuppressedUnknown, fmt.Errorf("guard %s: read session: %w", id, err)

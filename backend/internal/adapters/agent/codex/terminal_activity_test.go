@@ -1,6 +1,8 @@
 package codex
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -145,6 +147,41 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 				t.Fatalf("InspectTerminalSurface() = %+v, want work=%v composer=%v", got, tt.wantWork, tt.wantEditor)
 			}
 		})
+	}
+}
+
+func TestReportDraftVisibleRequiresCurrentNormalComposerAndMatchingID(t *testing.T) {
+	p := &Plugin{}
+	id := "report-batch:one"
+	draft := "› <ao-report-delivery id=\"report-batch:one\">\nReport text\n</ao-report-delivery>\n<ao-report-delivery-end id=\"report-batch:one\"/>\n\ngpt-5.6-sol low · ~/project\n"
+	if !p.ReportDraftVisible(draft, id) {
+		t.Fatal("matching report in normal composer must be visible")
+	}
+	for name, output := range map[string]string{
+		"other delivery":    strings.ReplaceAll(draft, "report-batch:one", "report-batch:two"),
+		"approval":          "› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n",
+		"modal after draft": draft[:strings.Index(draft, "\n\ngpt-")] + "\nApproval required\nPress enter to confirm\n\ngpt-5.6-sol low · ~/project\n",
+		"transcript":        "› <ao-report-delivery id=\"report-batch:one\">\nReport text\n",
+		"empty":             "› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if p.ReportDraftVisible(output, id) {
+				t.Fatal("must not treat ambiguous surface as a report draft")
+			}
+		})
+	}
+}
+
+func TestReportDraftVisibleWhenLargeComposerFillsViewport(t *testing.T) {
+	var output strings.Builder
+	output.WriteString("\x1b[1m›\x1b[0m status line 091\n")
+	for i := 92; i < 120; i++ {
+		fmt.Fprintf(&output, "  status line %03d\n", i)
+	}
+	output.WriteString("  <ao-report-delivery-end id=\"report-batch:large\"/>\n\n")
+	output.WriteString("  GPT-6-Sol medium · ~\n  tab to queue message\n")
+	if !New().ReportDraftVisible(output.String(), "report-batch:large") {
+		t.Fatal("visible delivery marker in a long normal composer must permit Enter-only rescue")
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"net"
 	"syscall"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputsettle"
 )
 
 const (
@@ -19,8 +21,6 @@ const (
 	ptyInputChunkRunes = 512
 	// ptyInputChunkDelay is the inter-chunk delay. Mirrors PTY_INPUT_CHUNK_DELAY_MS.
 	ptyInputChunkDelay = 15 * time.Millisecond
-	// ptyInputEnterDelay is the pause before sending Enter. Mirrors PTY_INPUT_ENTER_DELAY_MS.
-	ptyInputEnterDelay = 300 * time.Millisecond
 
 	dialTimeout      = 3 * time.Second
 	getOutputTimeout = 3 * time.Second
@@ -85,7 +85,7 @@ func clientSendMessage(addr, message string) error {
 	// settle, and the pause would only widen the guard-read→Enter window
 	// (mirrors the tmux runtime's enterDelay contract).
 	if len(runes) > 0 {
-		time.Sleep(ptyInputEnterDelay)
+		time.Sleep(inputsettle.Delay(message))
 	}
 	frame, err := EncodeMessage(MsgTerminalInput, []byte("\r"))
 	if err != nil {
